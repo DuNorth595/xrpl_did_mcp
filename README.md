@@ -76,8 +76,13 @@ If the keychain has no entry, the tool returns `NO_SEED` with the setup
 instructions. It never falls back to something weaker.
 
 For throwaway testnet use where a seed in the conversation is harmless,
-`--allow-inline-seed` permits passing one directly. It is off by default,
-because a seed in the agent's context is a seed the agent can read.
+`--allow-inline-seed` permits passing one directly as the tool's `seed`
+argument. It is off by default, because a seed in the agent's context is a
+seed the agent can read.
+
+Without that flag the `seed` argument is refused: the tool returns
+`INLINE_SEED_REFUSED` and falls back to the keychain. The keychain is
+always tried first, even when an inline seed is supplied.
 
 ---
 

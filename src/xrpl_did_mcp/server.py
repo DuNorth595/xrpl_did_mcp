@@ -172,6 +172,10 @@ def check_authorization(
         "The signing seed comes from the OS keychain, which the server "
         "reads itself, so the agent never sees the seed. This tool is only "
         "available if the server was started with --allow-writes.\n\n"
+        "An optional `seed` argument exists for throwaway testnet use. It is "
+        "refused unless the server was started with --allow-inline-seed, "
+        "because a seed in the agent's context is a seed the agent can "
+        "read.\n\n"
         "Defaults to testnet; pass network='mainnet' explicitly to use "
         "mainnet."
     ),
@@ -180,6 +184,7 @@ def publish_did_set(
     address: str,
     document_uri: str = "",
     network: str = "",
+    seed: str = "",
 ) -> dict[str, Any]:
     """Publish a DIDSet. Writes to the ledger and spends XRP."""
     net = network or _network_default()
@@ -203,8 +208,21 @@ def publish_did_set(
             "hint": "Shorten the URI, or publish the document under a shorter one.",
         }
 
-    seed, source = credentials.resolve_seed()
-    if seed is None:
+    # The keychain is the default. An inline seed is used only when the
+    # server was started with --allow-inline-seed, which is off by default.
+    signing_seed, source = credentials.resolve_seed(seed or None)
+    if signing_seed is None:
+        if seed:
+            return {
+                "error": "INLINE_SEED_REFUSED",
+                "message": "This server was started without --allow-inline-seed.",
+                "hint": (
+                    "An inline seed is refused by default, because a seed in "
+                    "the agent's context is a seed the agent can read. Use the "
+                    "keychain, or start the server with --allow-inline-seed for "
+                    "throwaway testnet use."
+                ),
+            }
         return {
             "error": "NO_SEED",
             "message": "No signing seed available.",
@@ -212,7 +230,7 @@ def publish_did_set(
         }
 
     try:
-        wallet = Wallet.from_seed(seed)
+        wallet = Wallet.from_seed(signing_seed)
     except Exception as exc:
         return {"error": "INVALID_SEED", "message": str(exc)}
 

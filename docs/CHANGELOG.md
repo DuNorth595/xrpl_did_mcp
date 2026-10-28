@@ -18,9 +18,11 @@ tools are opt-in.
 - **Write tools refuse unless the server is started with `--allow-writes`.**
   Without it, `publish_did_set` returns `WRITES_DISABLED` and submits
   nothing.
-- **`--allow-inline-seed`** permits a seed passed as a tool argument. Off
-  by default: a seed in the agent's context is a seed the agent can read.
-  It exists for throwaway testnet use.
+- **`--allow-inline-seed`** permits a seed passed as the tool's `seed`
+  argument. Off by default: a seed in the agent's context is a seed the
+  agent can read. It exists for throwaway testnet use. Without the flag
+  the argument is refused with `INLINE_SEED_REFUSED`. The keychain is
+  always tried first, even when an inline seed is supplied.
 
 There is no environment-variable fallback for the seed. An env var would
 put the seed in the environment of a process the agent can influence,

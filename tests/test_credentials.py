@@ -34,13 +34,48 @@ def test_publish_is_refused_without_allow_writes(monkeypatch):
     assert "--allow-writes" in out["hint"]
 
 
-def test_publish_did_set_takes_no_seed_argument():
-    """The seed is not a parameter, so it cannot be put in a tool call."""
+def test_publish_did_set_seed_parameter_is_optional_and_gated():
+    """The seed parameter exists but is optional and refused by default.
+
+    An inline seed is only honoured when the server was started with
+    --allow-inline-seed. Without that flag the parameter is refused, so
+    an agent cannot push a seed at the server.
+    """
     import inspect
 
     params = inspect.signature(server_module.publish_did_set).parameters
-    assert "seed" not in params
-    assert set(params) == {"address", "document_uri", "network"}
+    assert "seed" in params
+    assert params["seed"].default == ""
+    assert set(params) == {"address", "document_uri", "network", "seed"}
+
+
+def test_inline_seed_is_reachable_only_when_enabled(monkeypatch):
+    """The --allow-inline-seed flag must actually do something.
+
+    It was dead: publish_did_set called resolve_seed() with no arguments,
+    so the inline branch could never be reached from the MCP surface.
+    """
+    import inspect
+
+    params = inspect.signature(server_module.publish_did_set).parameters
+    assert "seed" in params, "publish_did_set takes no seed at all"
+
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", True)
+    monkeypatch.setattr(credentials, "ALLOW_INLINE_SEED", False)
+    monkeypatch.setattr(credentials, "seed_from_keychain", lambda: None)
+
+    out = server_module.publish_did_set(
+        address="rTest", network="testnet", seed="sSomeSeed"
+    )
+    assert out["error"] == "INLINE_SEED_REFUSED"
+
+    monkeypatch.setattr(credentials, "ALLOW_INLINE_SEED", True)
+    out2 = server_module.publish_did_set(
+        address="rTest", network="testnet", seed="sSomeSeed"
+    )
+    # A bad seed fails at wallet creation, not at the gate -- which proves
+    # the inline seed was accepted and passed through.
+    assert out2.get("error") == "INVALID_SEED", out2
 
 
 def test_write_tool_description_warns_that_it_spends():
@@ -51,6 +86,7 @@ def test_write_tool_description_warns_that_it_spends():
     assert "WRITES TO THE LEDGER" in tool.description
     assert "--allow-writes" in tool.description
     assert "keychain" in tool.description.lower()
+    assert "allow-inline-seed" in tool.description
 
 
 # ------------------------------------------------------- seed resolution
