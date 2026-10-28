@@ -6,7 +6,7 @@ Point any MCP client at it and your agent can derive, resolve, and authorize ide
 
 ```bash
 # not on PyPI yet -- install from GitHub
-pip install "xrpl-did-mcp @ git+https://github.com/DuNorth595/xrpl_did_mcp.git"
+pip install "xrpl-did-mcp @ git+https://github.com/DuNorth595/xrpl_did_mcp.git@v0.1.0"
 ```
 
 ---
