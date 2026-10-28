@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 Justin Douglas
+# SPDX-License-Identifier: MIT
 """Tests for the xrpl-did MCP server.
 
 These are offline: they exercise the tool surface and the pure-derivation
