@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: MIT
 """MCP server exposing did:xrpl identity operations on the XRP Ledger.
 
-Read-only by default. Tools that write to the ledger require an explicit
-seed to be supplied by the caller -- the server never holds credentials
-of its own.
+Read-only by default. The write tools refuse unless the server is started
+with --allow-writes, and they take their signing seed from the OS
+keychain, which the server reads itself -- the seed never passes through
+the agent's context.
 
 Run it:
-    python -m xrpl_did_mcp                 # stdio transport
-    python -m xrpl_did_mcp --http 8080     # streamable-http
+    python -m xrpl_did_mcp                       # stdio, read-only
+    python -m xrpl_did_mcp --allow-writes        # stdio, writes enabled
+    python -m xrpl_did_mcp --http 8080           # streamable-http
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import sys
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -29,7 +32,13 @@ from xrpl_agent_id import (
 )
 from xrpl_agent_id.tx_submit import submit_with_retry
 
-__version__ = "0.1.1"
+from xrpl_did_mcp import credentials
+
+__version__ = "0.2.0"
+
+#: Set by --allow-writes at startup. When False, the write tools refuse
+#: rather than submitting a transaction.
+ALLOW_WRITES = False
 
 # httpx logs every RPC request at INFO. On the stdio transport that lands in
 # the MCP client's log for every single ledger call, which is noise. The
@@ -159,20 +168,29 @@ def check_authorization(
     title="Publish an agent's DID Document (writes to the ledger)",
     description=(
         "Submit a DIDSet transaction so the agent's DID resolves to a DID "
-        "Document. THIS WRITES TO THE LEDGER and spends XRP. Requires a "
-        "funded seed passed in by the caller -- the server never holds "
-        "credentials of its own. Defaults to testnet; pass network='mainnet' "
-        "explicitly to use mainnet."
+        "Document. THIS WRITES TO THE LEDGER and spends XRP.\n\n"
+        "The signing seed comes from the OS keychain, which the server "
+        "reads itself, so the agent never sees the seed. This tool is only "
+        "available if the server was started with --allow-writes.\n\n"
+        "Defaults to testnet; pass network='mainnet' explicitly to use "
+        "mainnet."
     ),
 )
 def publish_did_set(
     address: str,
-    seed: str,
     document_uri: str = "",
     network: str = "",
 ) -> dict[str, Any]:
     """Publish a DIDSet. Writes to the ledger and spends XRP."""
     net = network or _network_default()
+
+    if not ALLOW_WRITES:
+        return {
+            "error": "WRITES_DISABLED",
+            "message": "This server was started without --allow-writes.",
+            "hint": "Restart the server with --allow-writes to enable this tool.",
+        }
+
     from xrpl.models.transactions import DIDSet
     from xrpl.wallet import Wallet
 
@@ -183,6 +201,14 @@ def publish_did_set(
             "error": "URI_TOO_LONG",
             "message": f"{len(uri_hex)} hex characters; the cap is 256",
             "hint": "Shorten the URI, or publish the document under a shorter one.",
+        }
+
+    seed, source = credentials.resolve_seed()
+    if seed is None:
+        return {
+            "error": "NO_SEED",
+            "message": "No signing seed available.",
+            "hint": credentials.install_keychain_help(),
         }
 
     try:
@@ -205,6 +231,7 @@ def publish_did_set(
         "network": net,
         "did": did_from_account(address, network=net),
         "uri": uri,
+        "seed_source": source,
     }
 
 
@@ -272,10 +299,41 @@ def main() -> None:
         default="",
         help="Default network (testnet or mainnet). Overridable per call.",
     )
+    parser.add_argument(
+        "--allow-writes",
+        action="store_true",
+        help=(
+            "Enable the write tools (publish_did_set). Without this flag "
+            "they refuse. Writes spend XRP."
+        ),
+    )
+    parser.add_argument(
+        "--allow-inline-seed",
+        action="store_true",
+        help=(
+            "Permit a seed passed as a tool argument. Off by default: a "
+            "seed in the agent's context is a seed the agent can read."
+        ),
+    )
     args = parser.parse_args()
+
+    global ALLOW_WRITES
+    ALLOW_WRITES = args.allow_writes
+    credentials.configure(allow_inline_seed=args.allow_inline_seed)
 
     if args.network:
         os.environ["XRPL_MCP_NETWORK"] = args.network
+
+    if args.allow_writes:
+        print(
+            "  writes ENABLED -- publish_did_set will submit transactions",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "  writes disabled (pass --allow-writes to enable publish_did_set)",
+            file=sys.stderr,
+        )
 
     if args.http:
         server.run(transport="streamable-http", port=args.http)

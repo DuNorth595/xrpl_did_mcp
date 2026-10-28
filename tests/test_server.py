@@ -73,26 +73,20 @@ def test_ledger_lookup_unknown_kind():
     assert out["error"] == "UNKNOWN_KIND"
 
 
-def test_publish_did_set_rejects_overlong_uri():
+def test_publish_did_set_rejects_overlong_uri(monkeypatch):
+    """The URI length is checked before any transaction is submitted."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", True)
+
     long_uri = "https://example.com/" + ("x" * 300)
-    out = call(
-        "publish_did_set",
-        {
-            "address": MAINNET_ADDRESS,
-            "seed": "snotaseed",
-            "document_uri": long_uri,
-            "network": "mainnet",
-        },
+    out = server_module.publish_did_set(
+        address=MAINNET_ADDRESS,
+        document_uri=long_uri,
+        network="mainnet",
     )
     assert out["error"] == "URI_TOO_LONG"
-
-
-def test_publish_did_set_rejects_bad_seed():
-    out = call(
-        "publish_did_set",
-        {"address": MAINNET_ADDRESS, "seed": "not-a-real-seed", "network": "mainnet"},
-    )
-    assert out["error"] == "INVALID_SEED"
 
 
 @pytest.mark.skipif(not LIVE, reason="set XRPL_MCP_LIVE=1 to run ledger-backed tests")

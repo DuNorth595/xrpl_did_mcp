@@ -6,7 +6,7 @@ Point any MCP client at it and your agent can derive, resolve, and authorize ide
 
 ```bash
 # not on PyPI yet -- install from GitHub, pinned to the release tag
-pip install "xrpl-did-mcp @ git+https://github.com/DuNorth595/xrpl_did_mcp.git@v0.1.1"
+pip install "xrpl-did-mcp @ git+https://github.com/DuNorth595/xrpl_did_mcp.git@v0.2.0"
 ```
 
 That one command pulls in `xrpl-agent-id` and `xrpl-py` as well. Both are
@@ -25,7 +25,13 @@ you.
 | `ledger_lookup` | Account balance, DID, or transaction result | No |
 | `publish_did_set` | Publish an agent's DID Document | **Yes** — spends XRP |
 
-Four of the five tools are read-only. The one that writes requires a funded seed to be passed in by the caller — **the server never holds credentials of its own**.
+Four of the five tools are read-only. The one that writes:
+
+- **Refuses by default.** It returns `WRITES_DISABLED` unless the server was
+  started with `--allow-writes`.
+- **Takes no seed argument.** The signing seed comes from the OS keychain,
+  which the server reads itself, so the seed never passes through the
+  agent's context.
 
 ---
 
@@ -47,10 +53,31 @@ Four of the five tools are read-only. The one that writes requires a funded seed
 ### Any other MCP client (stdio)
 
 ```bash
-xrpl-did-mcp                       # stdio, testnet
-xrpl-did-mcp --network mainnet     # stdio, mainnet
+xrpl-did-mcp                       # stdio, testnet, read-only
+xrpl-did-mcp --network mainnet     # stdio, mainnet, read-only
+xrpl-did-mcp --allow-writes        # enable publish_did_set
 xrpl-did-mcp --http 8080           # streamable-http
 ```
+
+### Enabling the write tool
+
+`publish_did_set` needs two things: the server started with
+`--allow-writes`, and a signing seed in the OS keychain.
+
+```bash
+# Store a seed (macOS). The server reads it; the agent never sees it.
+security add-generic-password -a "$USER" -s xrpl-did-mcp -w '<your seed>'
+```
+
+The keychain service defaults to `xrpl-did-mcp`; set
+`XRPL_MCP_KEYCHAIN_SERVICE` to change it.
+
+If the keychain has no entry, the tool returns `NO_SEED` with the setup
+instructions. It never falls back to something weaker.
+
+For throwaway testnet use where a seed in the conversation is harmless,
+`--allow-inline-seed` permits passing one directly. It is off by default,
+because a seed in the agent's context is a seed the agent can read.
 
 ---
 

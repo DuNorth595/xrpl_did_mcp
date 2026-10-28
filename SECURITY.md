@@ -24,7 +24,8 @@ not be.
 
 ### In scope
 
-- The seed-handling path in `publish_did_set`
+- The seed-handling path in `publish_did_set`, including the
+  keychain read and the `--allow-writes` gate
 - Any way a tool could be made to sign or publish something the caller did
   not intend
 - Credential or key material leaking into logs, errors, or tool output
@@ -40,13 +41,20 @@ not be.
 ## Security-relevant design decisions
 
 **This server holds no credentials of its own.** It has no keychain entry,
-no environment variable holding a seed, and no key file on disk. Every tool
-that needs a funded wallet takes the seed as an explicit argument from the
-caller.
+no environment variable holding a seed, and no key file on disk. The signing
+seed is read from the OS keychain by the server at the moment it is needed,
+so it never passes through the agent's context. There is deliberately no
+environment-variable fallback: an env var would put the seed in the
+environment of a process the agent can influence, which is the problem the
+keychain solves.
 
 **Four of the five tools are read-only.** `derive_did`, `resolve_did`,
 `check_authorization`, and `ledger_lookup` never submit a transaction.
 `publish_did_set` is the only tool that writes, and it costs XRP.
+
+**Write tools are opt-in.** `publish_did_set` returns `WRITES_DISABLED`
+unless the server was started with `--allow-writes`. An agent cannot turn
+a read-only server into a writing one.
 
 **The URI length is validated before submission.** XLS-40d caps
 `DIDSet.URI` at 256 hex characters; the tool rejects a longer one rather
