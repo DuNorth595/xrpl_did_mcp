@@ -14,6 +14,7 @@ Run it:
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 from typing import Any
 
@@ -29,6 +30,12 @@ from xrpl_agent_id import (
 from xrpl_agent_id.tx_submit import submit_with_retry
 
 __version__ = "0.1.1"
+
+# httpx logs every RPC request at INFO. On the stdio transport that lands in
+# the MCP client's log for every single ledger call, which is noise. The
+# requests still happen; they just stop announcing themselves.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 server = MCPServer(
     name="xrpl-did",
