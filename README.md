@@ -5,9 +5,13 @@ An MCP server for **`did:xrpl`** — W3C-compatible decentralized identifiers fo
 Point any MCP client at it and your agent can derive, resolve, and authorize identities natively.
 
 ```bash
-# not on PyPI yet -- install from GitHub
+# not on PyPI yet -- install from GitHub, pinned to the release tag
 pip install "xrpl-did-mcp @ git+https://github.com/DuNorth595/xrpl_did_mcp.git@v0.1.0"
 ```
+
+That one command pulls in `xrpl-agent-id` and `xrpl-py` as well. Both are
+pinned to release tags, so an install cannot silently change underneath
+you.
 
 ---
 
@@ -101,6 +105,17 @@ cd xrpl_did_mcp
 pip install -e ".[dev]"
 pytest
 ```
+
+The default suite is fully offline. One ledger-backed test is skipped unless
+`XRPL_MCP_LIVE=1` is set.
+
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [SECURITY.md](SECURITY.md) | Reporting a vulnerability, and the security-relevant design decisions |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute, and how to add a tool |
+| [docs/CHANGELOG.md](docs/CHANGELOG.md) | Release history |
 
 ## License
 

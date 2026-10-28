@@ -28,8 +28,13 @@ classifiers = [
 ]
 dependencies = [
   # xrpl-agent-id is not on PyPI yet, so it is installed from GitHub.
-  # A direct reference cannot also carry a version specifier.
-  "xrpl-agent-id @ git+https://github.com/DuNorth595/xrpl_agent_id.git",
+  #
+  # Pinned to a release tag, not to `main`. A direct reference cannot carry
+  # a version specifier, so the tag IS the pin: without it, `pip install`
+  # would resolve whatever `main` happened to be at that moment, and a
+  # breaking change upstream would silently change an install that was
+  # already working.
+  "xrpl-agent-id @ git+https://github.com/DuNorth595/xrpl_agent_id.git@v0.5.1",
   "mcp>=2.0",
 ]
 
@@ -54,6 +59,8 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/xrpl_did_mcp"]
+# Ship the PEP 561 marker so mypy/pyright pick up the annotations.
+artifacts = ["src/xrpl_did_mcp/py.typed"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src", "tests", "README.md", "LICENSE", "pyproject.toml"]
