@@ -5,7 +5,8 @@ An MCP server for **`did:xrpl`** — W3C-compatible decentralized identifiers fo
 Point any MCP client at it and your agent can derive, resolve, and authorize identities natively.
 
 ```bash
-pip install xrpl-did-mcp
+# not on PyPI yet -- install from GitHub
+pip install "xrpl-did-mcp @ git+https://github.com/DuNorth595/xrpl_did_mcp.git"
 ```
 
 ---

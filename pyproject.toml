@@ -27,7 +27,9 @@ classifiers = [
   "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-  "xrpl-agent-id>=0.5,<1",
+  # xrpl-agent-id is not on PyPI yet, so it is installed from GitHub.
+  # A direct reference cannot also carry a version specifier.
+  "xrpl-agent-id @ git+https://github.com/DuNorth595/xrpl_agent_id.git",
   "mcp>=2.0",
 ]
 
@@ -45,6 +47,10 @@ Issues = "https://github.com/DuNorth595/xrpl_did_mcp/issues"
 
 [project.scripts]
 xrpl-did-mcp = "xrpl_did_mcp.server:main"
+
+[tool.hatch.metadata]
+# xrpl-agent-id is not on PyPI yet; it is a direct reference to GitHub.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/xrpl_did_mcp"]
