@@ -9,14 +9,17 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import tomllib
-
 ROOT = Path(__file__).resolve().parent.parent
+
+# tomllib is 3.11+. The CI matrix includes 3.10, so read the two values we
+# need with a regex rather than adding a dependency to parse a TOML file.
+PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
 
 def _pyproject_version() -> str:
-    with (ROOT / "pyproject.toml").open("rb") as fh:
-        return tomllib.load(fh)["project"]["version"]
+    match = re.search(r'^version\s*=\s*"([^"]+)"', PYPROJECT, re.M)
+    assert match, "pyproject.toml has no version"
+    return match.group(1)
 
 
 def _server_version() -> str:
@@ -46,11 +49,8 @@ def test_changelog_has_an_entry_for_this_version():
 
 def test_dependencies_are_pinned_to_a_tag():
     """A git dependency on a moving branch can change under an install."""
-    with (ROOT / "pyproject.toml").open("rb") as fh:
-        deps = tomllib.load(fh)["project"]["dependencies"]
-    for dep in deps:
-        if "git+" in dep:
-            assert "@v" in dep, f"git dependency is not pinned to a tag: {dep}"
+    for dep in re.findall(r'"([^"]*git\+[^"]*)"', PYPROJECT):
+        assert "@v" in dep, f"git dependency is not pinned to a tag: {dep}"
 
 
 def test_production_surfaces_exist():
