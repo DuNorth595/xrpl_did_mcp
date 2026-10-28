@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] — 2026-10-28
+
+### Fixed
+
+- **`xrpl-agent-id` is now pinned to the `v0.5.1` tag.** It was referenced
+  from `main`, so an install could silently change when `main` moved.
+
+### Added
+
+- `SECURITY.md` — reporting path and the security-relevant design decisions
+- `CONTRIBUTING.md` — how to contribute and how to add a tool
+- `py.typed` — PEP 561 marker, shipped in the wheel
+
 ## [0.1.0] — 2026-10-28
 
 First release.
@@ -32,4 +45,5 @@ First release.
 - Eight offline tests; one ledger-backed test is skipped unless
   `XRPL_MCP_LIVE=1` is set.
 
+[0.1.1]: https://github.com/DuNorth595/xrpl_did_mcp/releases/tag/v0.1.1
 [0.1.0]: https://github.com/DuNorth595/xrpl_did_mcp/releases/tag/v0.1.0

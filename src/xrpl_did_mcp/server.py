@@ -28,7 +28,7 @@ from xrpl_agent_id import (
 )
 from xrpl_agent_id.tx_submit import submit_with_retry
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 server = MCPServer(
     name="xrpl-did",
