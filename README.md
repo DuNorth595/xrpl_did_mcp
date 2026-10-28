@@ -6,7 +6,7 @@ Point any MCP client at it and your agent can derive, resolve, and authorize ide
 
 ```bash
 # not on PyPI yet -- install from GitHub, pinned to the release tag
-pip install "xrpl-did-mcp @ git+https://github.com/DuNorth595/xrpl_did_mcp.git@v0.2.0"
+pip install "xrpl-did-mcp @ git+https://github.com/DuNorth595/xrpl_did_mcp.git@v0.3.0"
 ```
 
 That one command pulls in `xrpl-agent-id` and `xrpl-py` as well. Both are
@@ -22,10 +22,11 @@ you.
 | `derive_did` | Turn an XRP address into a `did:xrpl` | No |
 | `resolve_did` | Read a DID Document for a `did:xrpl` | No |
 | `check_authorization` | Decide whether an agent may act, with reasons | No |
-| `ledger_lookup` | Account balance, DID, or transaction result | No |
+| `lookup_account` | Read an account's balance and on-ledger state | No |
+| `lookup_transaction` | Read a transaction's result and inclusion status | No |
 | `publish_did_set` | Publish an agent's DID Document | **Yes** — spends XRP |
 
-Four of the five tools are read-only. The one that writes:
+Five of the six tools are read-only. The one that writes:
 
 - **Refuses by default.** It returns `WRITES_DISABLED` unless the server was
   started with `--allow-writes`.
@@ -138,7 +139,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-The default suite is fully offline. One ledger-backed test is skipped unless
+The default suite is fully offline. Two ledger-backed tests are skipped unless
 `XRPL_MCP_LIVE=1` is set.
 
 ## Documentation

@@ -48,9 +48,10 @@ environment-variable fallback: an env var would put the seed in the
 environment of a process the agent can influence, which is the problem the
 keychain solves.
 
-**Four of the five tools are read-only.** `derive_did`, `resolve_did`,
-`check_authorization`, and `ledger_lookup` never submit a transaction.
-`publish_did_set` is the only tool that writes, and it costs XRP.
+**Five of the six tools are read-only.** `derive_did`, `resolve_did`,
+`check_authorization`, `lookup_account`, and `lookup_transaction` never
+submit a transaction. `publish_did_set` is the only tool that writes, and
+it costs XRP.
 
 **Write tools are opt-in.** `publish_did_set` returns `WRITES_DISABLED`
 unless the server was started with `--allow-writes`. An agent cannot turn

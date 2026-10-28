@@ -64,15 +64,11 @@ def test_inline_seed_is_reachable_only_when_enabled(monkeypatch):
     monkeypatch.setattr(credentials, "ALLOW_INLINE_SEED", False)
     monkeypatch.setattr(credentials, "seed_from_keychain", lambda: None)
 
-    out = server_module.publish_did_set(
-        address="rTest", network="testnet", seed="sSomeSeed"
-    )
+    out = server_module.publish_did_set(address="rTest", network="testnet", seed="sSomeSeed")
     assert out["error"] == "INLINE_SEED_REFUSED"
 
     monkeypatch.setattr(credentials, "ALLOW_INLINE_SEED", True)
-    out2 = server_module.publish_did_set(
-        address="rTest", network="testnet", seed="sSomeSeed"
-    )
+    out2 = server_module.publish_did_set(address="rTest", network="testnet", seed="sSomeSeed")
     # A bad seed fails at wallet creation, not at the gate -- which proves
     # the inline seed was accepted and passed through.
     assert out2.get("error") == "INVALID_SEED", out2

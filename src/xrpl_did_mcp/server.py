@@ -34,7 +34,7 @@ from xrpl_agent_id.tx_submit import submit_with_retry
 
 from xrpl_did_mcp import credentials
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 #: Set by --allow-writes at startup. When False, the write tools refuse
 #: rather than submitting a transaction.
@@ -54,7 +54,11 @@ server = MCPServer(
         "W3C-compatible decentralized identifiers for AI agents on the XRP "
         "Ledger. Derive a did:xrpl from an address, resolve one back to its "
         "DID Document, and evaluate whether an agent is authorized to act. "
-        "Read-only unless a caller supplies a funded seed explicitly."
+        "Each tool has one job: derive_did turns an address into a did:xrpl, "
+        "resolve_did returns a DID Document, lookup_account returns an "
+        "account's balance and state, and lookup_transaction returns a "
+        "transaction's result. Read-only unless a caller supplies a funded "
+        "seed explicitly."
     ),
 )
 
@@ -98,7 +102,9 @@ def derive_did(address: str, network: str = "") -> dict[str, Any]:
     description=(
         "Resolve a did:xrpl into its DID Document by reading the XRP Ledger. "
         "The document is fetched from the ledger itself, so the result is "
-        "verifiable by anyone and does not depend on this server."
+        "verifiable by anyone and does not depend on this server.\n\n"
+        "This is the only tool that returns a DID Document. For an account's "
+        "balance and other on-ledger state, use lookup_account."
     ),
 )
 def resolve_did_tool(did: str, network: str = "") -> dict[str, Any]:
@@ -254,51 +260,67 @@ def publish_did_set(
 
 
 @server.tool(
-    name="ledger_lookup",
-    title="Look up an account, DID, or transaction on the ledger",
+    name="lookup_account",
+    title="Look up an account's balance and state on the ledger",
     description=(
-        "Query the XRP Ledger for an account's balance, the DID Document "
-        "attached to an account, or the result of a transaction by hash."
+        "Read an XRP Ledger account's on-ledger state: its balance in drops, "
+        "the number of objects it owns, and its next transaction sequence.\n\n"
+        "For an account's DID Document, use resolve_did instead -- that tool "
+        "returns the document itself, not the account's other state."
     ),
 )
-def ledger_lookup(
-    target: str,
-    kind: str = "account",
-    network: str = "",
-) -> dict[str, Any]:
-    """Look up an account, DID, or transaction hash on the ledger."""
+def lookup_account(address: str, network: str = "") -> dict[str, Any]:
+    """Look up an account's balance and on-ledger state."""
+    from xrpl.models.requests import AccountInfo
+
     net = network or _network_default()
     client = get_client(net)
-
     try:
-        if kind == "account":
-            info = client.request_account_info(target)
-            data = (info.result or {}).get("account_data") or {}
-            return {
-                "kind": "account",
-                "address": target,
-                "balance_drops": data.get("Balance"),
-                "owner_count": data.get("OwnerCount"),
-                "sequence": data.get("Sequence"),
-            }
-        if kind == "did":
-            document = resolve_did(target, network=net)
-            return {"kind": "did", "did": target, "document": document.to_json()}
-        if kind == "tx":
-            tx = client.request_tx(target)
-            result = tx.result or {}
-            meta = result.get("meta") or {}
-            return {
-                "kind": "tx",
-                "hash": target,
-                "result": meta.get("TransactionResult"),
-                "ledger_index": result.get("ledger_index"),
-                "validated": result.get("validated"),
-            }
+        info = client.request(AccountInfo(account=address))
     except Exception as exc:
         return {"error": type(exc).__name__, "message": str(exc)}
 
-    return {"error": "UNKNOWN_KIND", "kind": kind, "known": ["account", "did", "tx"]}
+    data = (info.result or {}).get("account_data") or {}
+    return {
+        "address": address,
+        "network": net,
+        "balance_drops": data.get("Balance"),
+        "owner_count": data.get("OwnerCount"),
+        "sequence": data.get("Sequence"),
+    }
+
+
+@server.tool(
+    name="lookup_transaction",
+    title="Look up a transaction's result on the ledger",
+    description=(
+        "Read a transaction's outcome from the XRP Ledger by its hash: the "
+        "result code (for example tesSUCCESS for a successful transaction, or "
+        "tecUNFUNDED_PAYMENT for one that failed), the ledger index it was "
+        "included in, and whether it has been validated.\n\n"
+        "For the account that sent or received it, use lookup_account."
+    ),
+)
+def lookup_transaction(tx_hash: str, network: str = "") -> dict[str, Any]:
+    """Look up a transaction's result and inclusion status."""
+    from xrpl.models.requests import Tx
+
+    net = network or _network_default()
+    client = get_client(net)
+    try:
+        tx = client.request(Tx(transaction=tx_hash))
+    except Exception as exc:
+        return {"error": type(exc).__name__, "message": str(exc)}
+
+    result = tx.result or {}
+    meta = result.get("meta") or {}
+    return {
+        "hash": tx_hash,
+        "network": net,
+        "result": meta.get("TransactionResult"),
+        "ledger_index": result.get("ledger_index"),
+        "validated": result.get("validated"),
+    }
 
 
 # ------------------------------------------------------------------- runner

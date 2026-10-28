@@ -92,7 +92,7 @@ def install_keychain_help() -> str:
     return (
         "No signing seed available.\n\n"
         f"Store one in the macOS keychain under service {KEYCHAIN_SERVICE!r}:\n\n"
-        "    security add-generic-password -a \"$USER\" "
+        '    security add-generic-password -a "$USER" '
         f"-s {KEYCHAIN_SERVICE} -w '<your seed>'\n\n"
         "Then restart the server. The agent never sees the seed -- the "
         "server reads it from the keychain itself."
