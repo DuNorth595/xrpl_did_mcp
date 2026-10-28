@@ -65,7 +65,7 @@ than letting the ledger reject it after paying a fee.
 failing a transaction that was in fact accepted.
 
 **Dependencies are pinned to a release tag.** `xrpl-agent-id` is installed
-from `v0.5.1`, not from a moving branch, so an install cannot silently
+from `v0.5.2`, not from a moving branch, so an install cannot silently
 change underneath you.
 
 ## Running it safely

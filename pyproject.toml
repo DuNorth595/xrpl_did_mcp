@@ -34,7 +34,7 @@ dependencies = [
   # would resolve whatever `main` happened to be at that moment, and a
   # breaking change upstream would silently change an install that was
   # already working.
-  "xrpl-agent-id @ git+https://github.com/DuNorth595/xrpl_agent_id.git@v0.5.1",
+  "xrpl-agent-id @ git+https://github.com/DuNorth595/xrpl_agent_id.git@v0.5.2",
   "mcp>=2.0",
 ]
 

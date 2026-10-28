@@ -28,7 +28,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # xrpl-agent-id is not on PyPI yet, so install it from GitHub first.
-          pip install "xrpl-agent-id @ git+https://github.com/DuNorth595/xrpl_agent_id.git@v0.5.1"
+          pip install "xrpl-agent-id @ git+https://github.com/DuNorth595/xrpl_agent_id.git@v0.5.2"
           pip install -e ".[dev]"
 
       - name: Lint
@@ -46,6 +46,6 @@ jobs:
           python-version: "3.12"
       - name: Report resolved dependency versions
         run: |
-          pip install "xrpl-agent-id @ git+https://github.com/DuNorth595/xrpl_agent_id.git@v0.5.1"
+          pip install "xrpl-agent-id @ git+https://github.com/DuNorth595/xrpl_agent_id.git@v0.5.2"
           pip install -e .
           pip list --format=freeze | grep -Ei "^(xrpl|mcp|httpx|pydantic)"
