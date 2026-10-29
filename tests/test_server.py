@@ -60,6 +60,9 @@ def test_all_tools_registered():
         "publish_did_set",
         "revoke_did",
         "revoke_credential",
+        "issue_credential",
+        "accept_credential",
+        "get_credential",
         "lookup_account",
         "lookup_transaction",
     }
@@ -81,6 +84,9 @@ def test_tool_names_are_verb_first():
             "check",
             "publish",
             "revoke",
+            "issue",
+            "accept",
+            "get",
             "lookup",
         }, f"{tool.name} does not start with a known verb"
 
@@ -277,6 +283,278 @@ def test_write_tools_refuse_without_allow_writes(monkeypatch):
         subject=MAINNET_ADDRESS, credential_type="agent-auth", network="mainnet"
     )
     assert out["error"] == "WRITES_DISABLED"
+
+
+def test_credential_write_tools_refuse_without_allow_writes(monkeypatch):
+    """The credential write tools refuse when the server is read-only.
+
+    issue_credential and accept_credential change the ledger, so they must
+    be gated exactly like the other write tools.
+    """
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", False)
+    monkeypatch.setattr(server_module.credentials, "resolve_seed", lambda seed=None: (None, "none"))
+
+    issued = server_module.issue_credential(
+        subject=MAINNET_ADDRESS, credential_type="agent-auth", network="testnet"
+    )
+    assert issued["error"] == "WRITES_DISABLED"
+
+    accepted = server_module.accept_credential(
+        issuer=MAINNET_ADDRESS, credential_type="agent-auth", network="testnet"
+    )
+    assert accepted["error"] == "WRITES_DISABLED"
+
+
+def test_get_credential_reads_without_allow_writes(monkeypatch):
+    """get_credential is a pure read: it works with writes disabled."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", False)
+
+    class _Node(dict):
+        pass
+
+    class _Resp:
+        result: ClassVar[dict] = {
+            "node": {"uri": "https://example.test/c.json", "expiration": 9999999999}
+        }
+
+    class _Client:
+        def request(self, req):
+            return _Resp()
+
+    monkeypatch.setattr(server_module, "get_client", lambda net: _Client())
+
+    out = server_module.get_credential(
+        issuer=MAINNET_ADDRESS,
+        subject=MAINNET_ADDRESS,
+        credential_type="agent-auth",
+        network="testnet",
+    )
+    assert "error" not in out, out
+    assert out["found"] is True
+    assert out["uri"] == "https://example.test/c.json"
+    assert out["expiration"] == 9999999999
+
+
+def test_get_credential_reports_a_missing_credential(monkeypatch):
+    """A credential that is not on the ledger is reported as not found."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+
+    class _Resp:
+        result: ClassVar[dict] = {"node": None}
+
+    class _Client:
+        def request(self, req):
+            return _Resp()
+
+    monkeypatch.setattr(server_module, "get_client", lambda net: _Client())
+
+    out = server_module.get_credential(
+        issuer=MAINNET_ADDRESS,
+        subject=MAINNET_ADDRESS,
+        credential_type="nope",
+        network="testnet",
+    )
+    assert "error" not in out, out
+    assert out["found"] is False
+    assert out["accepted"] is False
+
+
+def test_get_credential_reports_acceptance_separately(monkeypatch):
+    """Existence is not acceptance: an unaccepted credential is not valid.
+
+    XLS-70 sets lsfAccepted only when the subject signs. A credential that
+    exists but was never accepted must not read as accepted.
+    """
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+
+    class _Resp:
+        result: ClassVar[dict] = {"node": {"uri": None, "expiration": None}}
+
+    class _Client:
+        def request(self, req):
+            return _Resp()
+
+    monkeypatch.setattr(server_module, "get_client", lambda net: _Client())
+
+    out = server_module.get_credential(
+        issuer=MAINNET_ADDRESS,
+        subject=MAINNET_ADDRESS,
+        credential_type="agent-auth",
+        network="testnet",
+    )
+    assert out["found"] is True
+    assert out["accepted"] is False
+
+
+def test_issue_credential_submits_a_credentialcreate(monkeypatch):
+    """Issuing a credential submits a CredentialCreate with the issuer's account."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", True)
+
+    wallet = make_wallet()
+    monkeypatch.setattr(
+        server_module.credentials,
+        "resolve_seed",
+        lambda seed=None: (seed_of(wallet), "keychain"),
+    )
+
+    submitted = []
+    monkeypatch.setattr(
+        server_module,
+        "submit_with_retry",
+        lambda tx, client, wallet_: submitted.append(tx) or {"hash": "H", "meta": {}},
+    )
+
+    out = server_module.issue_credential(
+        subject=MAINNET_ADDRESS,
+        credential_type="agent-auth",
+        network="testnet",
+        uri="https://example.test/c.json",
+    )
+    assert "error" not in out, out
+    assert len(submitted) == 1
+    tx = submitted[0]
+    assert tx.transaction_type == "CredentialCreate"
+    assert tx.account == wallet.address
+    assert tx.subject == MAINNET_ADDRESS
+    assert tx.credential_type == b"agent-auth".hex().upper()
+    # The ledger carries the URI as hex, not as text.
+    assert tx.uri == b"https://example.test/c.json".hex().upper()
+    # A newly issued credential is not valid for the subject until accepted.
+    assert out["accepted"] is False
+    assert "accept_credential" in out["next_step"]
+
+
+def test_issue_credential_accepts_a_did_as_the_subject(monkeypatch):
+    """A did:xrpl subject is reduced to its address before the create."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", True)
+
+    wallet = make_wallet()
+    monkeypatch.setattr(
+        server_module.credentials,
+        "resolve_seed",
+        lambda seed=None: (seed_of(wallet), "keychain"),
+    )
+
+    submitted = []
+    monkeypatch.setattr(
+        server_module,
+        "submit_with_retry",
+        lambda tx, client, wallet_: submitted.append(tx) or {"hash": "H", "meta": {}},
+    )
+
+    out = server_module.issue_credential(
+        subject=MAINNET_DID, credential_type="agent-auth", network="testnet"
+    )
+    assert "error" not in out, out
+    assert submitted[0].subject == MAINNET_ADDRESS
+
+
+def test_accept_credential_submits_a_credentialaccept(monkeypatch):
+    """Accepting a credential submits a CredentialAccept from the subject."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", True)
+
+    wallet = make_wallet()
+    monkeypatch.setattr(
+        server_module.credentials,
+        "resolve_seed",
+        lambda seed=None: (seed_of(wallet), "keychain"),
+    )
+
+    submitted = []
+    monkeypatch.setattr(
+        server_module,
+        "submit_with_retry",
+        lambda tx, client, wallet_: submitted.append(tx) or {"hash": "H", "meta": {}},
+    )
+
+    out = server_module.accept_credential(
+        issuer=MAINNET_ADDRESS, credential_type="agent-auth", network="testnet"
+    )
+    assert "error" not in out, out
+    assert len(submitted) == 1
+    tx = submitted[0]
+    assert tx.transaction_type == "CredentialAccept"
+    # The subject is the signing account, not the issuer.
+    assert tx.account == wallet.address
+    assert tx.issuer == MAINNET_ADDRESS
+    assert tx.credential_type == b"agent-auth".hex().upper()
+    assert out["accepted"] is True
+
+
+def test_accept_credential_accepts_a_did_as_the_issuer(monkeypatch):
+    """A did:xrpl issuer is reduced to its address before the accept."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", True)
+
+    wallet = make_wallet()
+    monkeypatch.setattr(
+        server_module.credentials,
+        "resolve_seed",
+        lambda seed=None: (seed_of(wallet), "keychain"),
+    )
+
+    submitted = []
+    monkeypatch.setattr(
+        server_module,
+        "submit_with_retry",
+        lambda tx, client, wallet_: submitted.append(tx) or {"hash": "H", "meta": {}},
+    )
+
+    out = server_module.accept_credential(
+        issuer=MAINNET_DID, credential_type="agent-auth", network="testnet"
+    )
+    assert "error" not in out, out
+    assert submitted[0].issuer == MAINNET_ADDRESS
+
+
+def test_credential_write_tools_refuse_an_inline_seed(monkeypatch):
+    """An inline seed is refused unless the server allows it.
+
+    A seed in the agent's context is a seed the agent can read, so the
+    default is to refuse it and use the keychain instead.
+    """
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", True)
+    monkeypatch.setattr(server_module.credentials, "resolve_seed", lambda seed=None: (None, "none"))
+
+    out = server_module.issue_credential(
+        subject=MAINNET_ADDRESS,
+        credential_type="agent-auth",
+        network="testnet",
+        seed="s" * 30,
+    )
+    assert out["error"] == "INLINE_SEED_REFUSED"
+
+    accepted = server_module.accept_credential(
+        issuer=MAINNET_ADDRESS,
+        credential_type="agent-auth",
+        network="testnet",
+        seed="s" * 30,
+    )
+    assert accepted["error"] == "INLINE_SEED_REFUSED"
 
 
 def test_revoke_did_rejects_a_mismatched_address(monkeypatch):

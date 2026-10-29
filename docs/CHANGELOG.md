@@ -4,6 +4,55 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-10-29
+
+The credential lifecycle, end to end.
+
+v0.4.0 could withdraw a credential but not create one. An agent could be
+de-authorized but never authorized through this server, which left the
+credential surface half a lifecycle. That is the gap the MCP registry's
+completeness review flagged: "credential issuance or inspection is
+absent".
+
+Three tools close it. `issue_credential` and `accept_credential` are the
+two signatures a credential needs; `get_credential` reads its state
+without changing anything.
+
+### Added
+
+- **`issue_credential`** — submit a `CredentialCreate`, creating a
+  credential for a subject. The subject may be an address or a
+  `did:xrpl`.
+- **`accept_credential`** — submit a `CredentialAccept` from the signing
+  account. A credential created by the issuer is not valid for the
+  subject until the subject signs it, so this is the subject's side of
+  the same object.
+- **`get_credential`** — read one credential's state from the ledger:
+  whether it exists, whether the subject has accepted it, its URI, and
+  its expiration. A pure read — it needs neither `--allow-writes` nor a
+  seed.
+
+### Changed
+
+- The server instructions now describe the credential lifecycle and name
+  all five write tools.
+- The README's tool table lists eleven tools, and a new section walks
+  through the four-step lifecycle.
+
+### Notes
+
+- **Existence is not acceptance.** XLS-70 sets the accepted flag only
+  when the subject signs. `get_credential` reports the two states
+  separately, and `issue_credential` says in its output that the
+  credential still needs accepting.
+- **The write gating is unchanged.** `issue_credential` and
+  `accept_credential` refuse with `WRITES_DISABLED` unless the server was
+  started with `--allow-writes`, and refuse an inline seed with
+  `INLINE_SEED_REFUSED` unless it was started with
+  `--allow-inline-seed`. The seed comes from the OS keychain, so it never
+  passes through the agent's context.
+- The URI on a credential is carried by the ledger as hex, not as text.
+
 ## [0.4.0] — 2026-10-28
 
 Revocation, and a trust decision the caller cannot widen.

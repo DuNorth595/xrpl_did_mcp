@@ -6,7 +6,7 @@ Point any MCP client at it and your agent can derive, resolve, and authorize ide
 
 ```bash
 # not on PyPI yet -- install from GitHub, pinned to the release tag
-pip install "xrpl-did-mcp @ git+https://github.com/DuNorth595/xrpl_did_mcp.git@v0.4.0"
+pip install "xrpl-did-mcp @ git+https://github.com/DuNorth595/xrpl_did_mcp.git@v0.5.0"
 ```
 
 That one command pulls in `xrpl-agent-id` and `xrpl-py` as well. Both are
@@ -24,11 +24,14 @@ you.
 | `check_authorization` | Decide whether an agent may act, with reasons | No |
 | `lookup_account` | Read an account's balance and on-ledger state | No |
 | `lookup_transaction` | Read a transaction's result and inclusion status | No |
+| `get_credential` | Read a credential's state — exists, accepted, URI, expiry | No |
+| `issue_credential` | Create a credential for a subject | **Yes** — spends XRP |
+| `accept_credential` | Accept a credential issued to the signing account | **Yes** — spends XRP |
 | `publish_did_set` | Publish an agent's DID Document | **Yes** — spends XRP |
 | `revoke_did` | Delete an account's DID Document | **Yes** — spends XRP |
 | `revoke_credential` | Withdraw one credential | **Yes** — spends XRP |
 
-Five of the eight tools are read-only. The three that write:
+Six of the eleven tools are read-only. The five that write:
 
 - **Refuse by default.** Each returns `WRITES_DISABLED` unless the server
   was started with `--allow-writes`.
@@ -53,6 +56,28 @@ account, a credential by (issuer, subject, credential_type). rippled's
 `DIDDelete` erases only the DID. To withdraw an authorization, revoke the
 credential too.
 
+### The credential lifecycle
+
+A credential is identified by the triple (issuer, subject,
+credential_type), and it takes two signatures before it is valid for the
+subject:
+
+| Step | Tool | Who signs |
+|---|---|---|
+| 1. Create | `issue_credential` | the issuer |
+| 2. Accept | `accept_credential` | the subject |
+| 3. Read | `get_credential` | nobody — it is a read |
+| 4. Withdraw | `revoke_credential` | the issuer |
+
+`issue_credential` submits a `CredentialCreate`. The credential exists on
+the ledger at that point, but XLS-70 only sets the accepted flag when the
+subject signs — so until `accept_credential` runs, the credential does not
+count as held. `get_credential` reports the two states separately, because
+existence is not acceptance.
+
+The subject and issuer may each be an address or a `did:xrpl`; a
+`did:xrpl` is reduced to its address before the transaction is built.
+
 ---
 
 ## Connect it
@@ -75,14 +100,15 @@ credential too.
 ```bash
 xrpl-did-mcp                       # stdio, testnet, read-only
 xrpl-did-mcp --network mainnet     # stdio, mainnet, read-only
-xrpl-did-mcp --allow-writes        # enable publish_did_set
+xrpl-did-mcp --allow-writes        # enable the write tools
 xrpl-did-mcp --http 8080           # streamable-http
 ```
 
-### Enabling the write tool
+### Enabling the write tools
 
-`publish_did_set` needs two things: the server started with
-`--allow-writes`, and a signing seed in the OS keychain.
+The write tools — `publish_did_set`, `revoke_did`, `revoke_credential`,
+`issue_credential` and `accept_credential` — need two things: the server
+started with `--allow-writes`, and a signing seed in the OS keychain.
 
 ```bash
 # Store a seed (macOS). The server reads it; the agent never sees it.

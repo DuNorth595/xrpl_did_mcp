@@ -38,7 +38,7 @@ from xrpl_agent_id.tx_submit import submit_with_retry
 
 from xrpl_did_mcp import credentials, policy
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 #: Set by --allow-writes at startup. When False, the write tools refuse
 #: rather than submitting a transaction.
@@ -61,10 +61,14 @@ server = MCPServer(
         "Each tool has one job: derive_did turns an address into a did:xrpl, "
         "resolve_did returns a DID Document, lookup_account returns an "
         "account's balance and state, and lookup_transaction returns a "
-        "transaction's result. check_authorization decides whether an agent "
-        "may act. The three write tools -- publish_did_set, revoke_did and "
-        "revoke_credential -- change the ledger and are refused unless the "
-        "server was started with --allow-writes."
+        "transaction's result. get_credential reads a credential's state, and "
+        "check_authorization decides whether an agent may act.\n\n"
+        "The credential lifecycle is issue_credential (the issuer creates it), "
+        "accept_credential (the subject signs it), get_credential (anyone "
+        "reads its state) and revoke_credential (the issuer withdraws it).\n\n"
+        "The write tools -- publish_did_set, revoke_did, revoke_credential, "
+        "issue_credential and accept_credential -- change the ledger and are "
+        "refused unless the server was started with --allow-writes."
     ),
 )
 
@@ -475,6 +479,299 @@ def revoke_credential(
         "subject": subject_addr,
         "credential_type": credential_type,
         "seed_source": source,
+    }
+
+
+@server.tool(
+    name="issue_credential",
+    title="Issue a credential to a subject (writes to the ledger)",
+    description=(
+        "Create a credential on the XRP Ledger, so a subject can be authorised "
+        "to act. THIS WRITES TO THE LEDGER and spends XRP.\n\n"
+        "The signing seed comes from the OS keychain, which the server reads "
+        "itself, so the agent never sees the seed. This tool is only "
+        "available if the server was started with --allow-writes.\n\n"
+        "An optional `seed` argument exists for throwaway testnet use. It is "
+        "refused unless the server was started with --allow-inline-seed, "
+        "because a seed in the agent's context is a seed the agent can read.\n\n"
+        "The credential is created but not yet valid for the subject until "
+        "the subject accepts it with accept_credential. To withdraw a "
+        "credential, use revoke_credential instead. To read a credential's "
+        "state without changing anything, use get_credential."
+    ),
+)
+def issue_credential(
+    subject: str,
+    credential_type: str,
+    network: str = "",
+    uri: str = "",
+    expiration: int | None = None,
+    seed: str = "",
+) -> dict[str, Any]:
+    """Issue a credential to a subject's DID or address."""
+    net = network or _network_default()
+
+    if not ALLOW_WRITES:
+        return {
+            "error": "WRITES_DISABLED",
+            "message": "This server was started without --allow-writes.",
+            "hint": "Restart the server with --allow-writes to enable this tool.",
+        }
+
+    from xrpl.models.transactions import CredentialCreate
+    from xrpl.wallet import Wallet
+
+    subject_addr = subject
+    if subject.startswith("did:xrpl:"):
+        try:
+            _, subject_addr = parse_did(subject)
+        except Exception as exc:
+            return {"error": "INVALID_DID", "message": str(exc)}
+
+    signing_seed, source = credentials.resolve_seed(seed or None)
+    if signing_seed is None:
+        if seed:
+            return {
+                "error": "INLINE_SEED_REFUSED",
+                "message": "This server was started without --allow-inline-seed.",
+                "hint": (
+                    "An inline seed is refused by default, because a seed in "
+                    "the agent's context is a seed the agent can read. Use the "
+                    "keychain, or start the server with --allow-inline-seed for "
+                    "throwaway testnet use."
+                ),
+            }
+        return {
+            "error": "NO_SEED",
+            "message": "No signing seed available.",
+            "hint": credentials.install_keychain_help(),
+        }
+
+    try:
+        wallet = Wallet.from_seed(signing_seed)
+    except Exception as exc:
+        return {"error": "INVALID_SEED", "message": str(exc)}
+
+    try:
+        cred_type = credential_type.encode("utf-8")
+    except Exception as exc:
+        return {"error": "INVALID_CREDENTIAL_TYPE", "message": str(exc)}
+
+    client = get_client(net)
+    # The ledger carries the URI as hex, not as text.
+    tx = CredentialCreate(
+        account=wallet.address,
+        subject=subject_addr,
+        credential_type=cred_type.hex().upper(),
+        uri=uri.encode("utf-8").hex().upper() if uri else None,
+        expiration=expiration,
+    )
+    try:
+        result = submit_with_retry(tx, client, wallet) or {}
+    except Exception as exc:
+        return {"error": type(exc).__name__, "message": str(exc)}
+
+    meta = result.get("meta") or {}
+    return {
+        "tx_hash": result.get("hash"),
+        "tx_result": meta.get("TransactionResult"),
+        "ledger_index": result.get("ledger_index"),
+        "network": net,
+        "issuer": wallet.address,
+        "subject": subject_addr,
+        "credential_type": credential_type,
+        "uri": uri or None,
+        "expiration": expiration,
+        "accepted": False,
+        "next_step": (
+            "The credential exists but is not yet valid for the subject. "
+            "The subject must call accept_credential."
+        ),
+        "seed_source": source,
+    }
+
+
+@server.tool(
+    name="accept_credential",
+    title="Accept a credential issued to this account (writes to the ledger)",
+    description=(
+        "Accept a credential that was issued to this account, making it "
+        "valid for the subject. THIS WRITES TO THE LEDGER and spends XRP.\n\n"
+        "A credential created with issue_credential is not valid for the "
+        "subject until the subject signs it. This tool is the subject's side "
+        "of that: it submits the CredentialAccept.\n\n"
+        "The signing seed comes from the OS keychain, which the server reads "
+        "itself, so the agent never sees the seed. This tool is only "
+        "available if the server was started with --allow-writes.\n\n"
+        "An optional `seed` argument exists for throwaway testnet use. It is "
+        "refused unless the server was started with --allow-inline-seed.\n\n"
+        "To read a credential's state without changing anything, use "
+        "get_credential. To withdraw a credential, use revoke_credential."
+    ),
+)
+def accept_credential(
+    issuer: str,
+    credential_type: str,
+    network: str = "",
+    seed: str = "",
+) -> dict[str, Any]:
+    """Accept a credential issued to the signing account."""
+    net = network or _network_default()
+
+    if not ALLOW_WRITES:
+        return {
+            "error": "WRITES_DISABLED",
+            "message": "This server was started without --allow-writes.",
+            "hint": "Restart the server with --allow-writes to enable this tool.",
+        }
+
+    from xrpl.models.transactions import CredentialAccept
+    from xrpl.wallet import Wallet
+
+    issuer_addr = issuer
+    if issuer.startswith("did:xrpl:"):
+        try:
+            _, issuer_addr = parse_did(issuer)
+        except Exception as exc:
+            return {"error": "INVALID_DID", "message": str(exc)}
+
+    signing_seed, source = credentials.resolve_seed(seed or None)
+    if signing_seed is None:
+        if seed:
+            return {
+                "error": "INLINE_SEED_REFUSED",
+                "message": "This server was started without --allow-inline-seed.",
+                "hint": (
+                    "An inline seed is refused by default, because a seed in "
+                    "the agent's context is a seed the agent can read. Use the "
+                    "keychain, or start the server with --allow-inline-seed for "
+                    "throwaway testnet use."
+                ),
+            }
+        return {
+            "error": "NO_SEED",
+            "message": "No signing seed available.",
+            "hint": credentials.install_keychain_help(),
+        }
+
+    try:
+        wallet = Wallet.from_seed(signing_seed)
+    except Exception as exc:
+        return {"error": "INVALID_SEED", "message": str(exc)}
+
+    try:
+        cred_type = credential_type.encode("utf-8")
+    except Exception as exc:
+        return {"error": "INVALID_CREDENTIAL_TYPE", "message": str(exc)}
+
+    client = get_client(net)
+    tx = CredentialAccept(
+        account=wallet.address,
+        issuer=issuer_addr,
+        credential_type=cred_type.hex().upper(),
+    )
+    try:
+        result = submit_with_retry(tx, client, wallet) or {}
+    except Exception as exc:
+        return {"error": type(exc).__name__, "message": str(exc)}
+
+    meta = result.get("meta") or {}
+    return {
+        "tx_hash": result.get("hash"),
+        "tx_result": meta.get("TransactionResult"),
+        "ledger_index": result.get("ledger_index"),
+        "network": net,
+        "issuer": issuer_addr,
+        "subject": wallet.address,
+        "credential_type": credential_type,
+        "accepted": True,
+        "seed_source": source,
+    }
+
+
+@server.tool(
+    name="get_credential",
+    title="Read a credential's state on the ledger",
+    description=(
+        "Read one credential's state from the XRP Ledger: whether it exists, "
+        "whether the subject has accepted it, its URI, and its expiration.\n\n"
+        "This is a pure read. It submits no transaction, spends nothing, and "
+        "does not need --allow-writes.\n\n"
+        "Existence is not acceptance: a credential issued with "
+        "issue_credential does not become valid for the subject until the "
+        "subject accepts it. This tool reports which of those is true.\n\n"
+        "For an account's balance and other state, use lookup_account. To "
+        "accept a credential, use accept_credential."
+    ),
+)
+def get_credential(
+    issuer: str,
+    subject: str,
+    credential_type: str,
+    network: str = "",
+) -> dict[str, Any]:
+    """Read a credential's state from the ledger."""
+    net = network or _network_default()
+
+    issuer_addr = issuer
+    if issuer.startswith("did:xrpl:"):
+        try:
+            _, issuer_addr = parse_did(issuer)
+        except Exception as exc:
+            return {"error": "INVALID_DID", "message": str(exc)}
+
+    subject_addr = subject
+    if subject.startswith("did:xrpl:"):
+        try:
+            _, subject_addr = parse_did(subject)
+        except Exception as exc:
+            return {"error": "INVALID_DID", "message": str(exc)}
+
+    try:
+        cred_type = credential_type.encode("utf-8")
+    except Exception as exc:
+        return {"error": "INVALID_CREDENTIAL_TYPE", "message": str(exc)}
+
+    from xrpl.models.requests import LedgerEntry
+    from xrpl.models.requests.ledger_entry import Credential as LedgerCredential
+
+    client = get_client(net)
+    try:
+        response = client.request(
+            LedgerEntry(
+                credential=LedgerCredential(
+                    subject=subject_addr,
+                    issuer=issuer_addr,
+                    credential_type=cred_type.hex().upper(),
+                )
+            )
+        )
+    except Exception as exc:
+        return {"error": type(exc).__name__, "message": str(exc)}
+
+    node = (getattr(response, "result", None) or {}).get("node")
+    if node is None:
+        return {
+            "found": False,
+            "network": net,
+            "issuer": issuer_addr,
+            "subject": subject_addr,
+            "credential_type": credential_type,
+            "accepted": False,
+            "message": "No such credential on the ledger.",
+        }
+
+    from xrpl_agent_id.credential import credential_is_accepted
+
+    return {
+        "found": True,
+        "network": net,
+        "issuer": issuer_addr,
+        "subject": subject_addr,
+        "credential_type": credential_type,
+        "accepted": credential_is_accepted(node),
+        "uri": node.get("uri"),
+        "expiration": node.get("expiration"),
     }
 
 

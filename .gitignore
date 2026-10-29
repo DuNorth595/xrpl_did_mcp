@@ -12,3 +12,4 @@ venv/
 htmlcov/
 .env
 .DS_Store
+uv.lock
