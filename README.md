@@ -6,7 +6,7 @@ Point any MCP client at it and your agent can derive, resolve, and authorize ide
 
 ```bash
 # not on PyPI yet -- install from GitHub, pinned to the release tag
-pip install "xrpl-did-mcp @ git+https://github.com/DuNorth595/xrpl_did_mcp.git@v0.5.0"
+pip install "xrpl-did-mcp @ git+https://github.com/DuNorth595/xrpl_did_mcp.git@v0.6.0"
 ```
 
 That one command pulls in `xrpl-agent-id` and `xrpl-py` as well. Both are
@@ -25,13 +25,14 @@ you.
 | `lookup_account` | Read an account's balance and on-ledger state | No |
 | `lookup_transaction` | Read a transaction's result and inclusion status | No |
 | `get_credential` | Read a credential's state — exists, accepted, URI, expiry | No |
+| `list_credentials` | List the credentials on an account, held and issued | No |
 | `issue_credential` | Create a credential for a subject | **Yes** — spends XRP |
 | `accept_credential` | Accept a credential issued to the signing account | **Yes** — spends XRP |
 | `publish_did_set` | Publish an agent's DID Document | **Yes** — spends XRP |
 | `revoke_did` | Delete an account's DID Document | **Yes** — spends XRP |
 | `revoke_credential` | Withdraw one credential | **Yes** — spends XRP |
 
-Six of the eleven tools are read-only. The five that write:
+Seven of the twelve tools are read-only. The five that write:
 
 - **Refuse by default.** Each returns `WRITES_DISABLED` unless the server
   was started with `--allow-writes`.
@@ -66,8 +67,9 @@ subject:
 |---|---|---|
 | 1. Create | `issue_credential` | the issuer |
 | 2. Accept | `accept_credential` | the subject |
-| 3. Read | `get_credential` | nobody — it is a read |
-| 4. Withdraw | `revoke_credential` | the issuer |
+| 3. Read one | `get_credential` | nobody — it is a read |
+| 4. List all | `list_credentials` | nobody — it is a read |
+| 5. Withdraw | `revoke_credential` | the issuer |
 
 `issue_credential` submits a `CredentialCreate`. The credential exists on
 the ledger at that point, but XLS-70 only sets the accepted flag when the
@@ -77,6 +79,40 @@ existence is not acceptance.
 
 The subject and issuer may each be an address or a `did:xrpl`; a
 `did:xrpl` is reduced to its address before the transaction is built.
+
+### Finding credentials without knowing which
+
+`get_credential` needs all three identifiers: issuer, subject, and
+credential type. When you know the account but not the credential,
+`list_credentials` enumerates instead:
+
+```json
+{
+  "account": "rSubjectAddress",
+  "held_count": 2,
+  "issued_count": 0,
+  "held": [
+    {
+      "issuer": "did:xrpl:2:rIssuer",
+      "subject": "did:xrpl:2:rSubject",
+      "credential_type": "KYC",
+      "accepted": false,
+      "uri": null,
+      "expiration": null,
+      "role": "subject"
+    }
+  ]
+}
+```
+
+`held` is what the account holds as a subject; `issued` is what it has
+issued to others. Each entry carries the issuer, the subject, the
+credential type, the URI, the expiry, and whether the subject has
+accepted it — the same fields `get_credential` returns, so the two tools
+answer the same shape of question at different scopes.
+
+Pass `include_issued=False` to skip the issued side when you only care
+about what the account holds.
 
 ---
 

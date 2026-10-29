@@ -4,6 +4,45 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-10-29
+
+Credential discovery.
+
+v0.5.0 completed the credential lifecycle, and the MCP registry's
+completeness review still had one complaint: "the lack of a credential
+listing/discovery operation, which could make it harder to enumerate
+credentials without already knowing the issuer, subject, and type."
+
+That was fair. `get_credential` needs all three identifiers, so it
+cannot answer the question you actually have when you are holding a
+credential and not sure what it is.
+
+### Added
+
+- **`list_credentials`** — enumerate every credential involving an
+  account: the ones it holds as a subject, and the ones it has issued to
+  others. A pure read, needing neither `--allow-writes` nor a seed.
+
+  Each entry carries the issuer, the subject, the credential type, the
+  URI, the expiry, and whether the subject has accepted it — the same
+  fields `get_credential` returns. The two tools answer the same shape
+  of question at different scopes: one credential, or all of them.
+
+  Pass `include_issued=False` to skip the issued side when you only care
+  about what the account holds.
+
+### Notes
+
+- The ledger indexes credentials by subject, so there is no direct
+  "credentials I issued" query. The issued side walks the issuer's own
+  account objects instead, which is why it is a separate walk rather than
+  a filter on the held list.
+- Acceptance is reported per entry. A credential that exists but was
+  never accepted reads as `accepted: false`, because XLS-70 sets that
+  flag only when the subject signs.
+
+The server now has twelve tools: seven read-only, five write.
+
 ## [0.5.0] — 2026-10-29
 
 The credential lifecycle, end to end.

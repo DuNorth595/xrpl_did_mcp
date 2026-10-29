@@ -38,7 +38,7 @@ from xrpl_agent_id.tx_submit import submit_with_retry
 
 from xrpl_did_mcp import credentials, policy
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 #: Set by --allow-writes at startup. When False, the write tools refuse
 #: rather than submitting a transaction.
@@ -65,7 +65,9 @@ server = MCPServer(
         "check_authorization decides whether an agent may act.\n\n"
         "The credential lifecycle is issue_credential (the issuer creates it), "
         "accept_credential (the subject signs it), get_credential (anyone "
-        "reads its state) and revoke_credential (the issuer withdraws it).\n\n"
+        "reads one credential's state), list_credentials (anyone enumerates "
+        "an account's credentials) and revoke_credential (the issuer "
+        "withdraws it).\n\n"
         "The write tools -- publish_did_set, revoke_did, revoke_credential, "
         "issue_credential and accept_credential -- change the ledger and are "
         "refused unless the server was started with --allow-writes."
@@ -773,6 +775,130 @@ def get_credential(
         "uri": node.get("uri"),
         "expiration": node.get("expiration"),
     }
+
+
+@server.tool(
+    name="list_credentials",
+    title="List the credentials on an account",
+    description=(
+        "List every credential on the XRP Ledger that involves an account -- "
+        "the ones it holds as a subject, and the ones it issued to others.\n\n"
+        "This is a pure read. It submits no transaction, spends nothing, and "
+        "does not need --allow-writes.\n\n"
+        "Use this when you know WHO but not WHICH credential: it answers "
+        "'what credentials does this account have?' without needing the "
+        "issuer, subject and type up front. For one known credential's state, "
+        "use get_credential instead.\n\n"
+        "Results carry the issuer, the subject, the credential type, and "
+        "whether the subject has accepted each one. Credentials that exist "
+        "but were never accepted are marked accepted=false, because XLS-70 "
+        "only sets that flag when the subject signs."
+    ),
+)
+def list_credentials(
+    account: str,
+    network: str = "",
+    include_issued: bool = True,
+) -> dict[str, Any]:
+    """List the credentials an account holds and has issued."""
+    net = network or _network_default()
+
+    subject_addr = account
+    if account.startswith("did:xrpl:"):
+        try:
+            _, subject_addr = parse_did(account)
+        except Exception as exc:
+            return {"error": "INVALID_DID", "message": str(exc)}
+
+    from xrpl_agent_id.registry import AgentRegistry
+
+    try:
+        registry = AgentRegistry(network=net)
+        record = registry.resolve(subject_addr, use_cache=False)
+    except ValueError as exc:
+        return {"error": "INVALID_ACCOUNT", "message": str(exc)}
+    except Exception as exc:
+        return {"error": type(exc).__name__, "message": str(exc)}
+
+    held = []
+    for cred in record.credentials:
+        held.append(
+            {
+                "issuer": cred.issuer,
+                "subject": cred.subject,
+                "credential_type": cred.credential_type.decode("utf-8", "replace"),
+                "accepted": cred.accepted,
+                "uri": cred.uri,
+                "expiration": cred.expiration,
+                "role": "subject",
+            }
+        )
+
+    issued = []
+    if include_issued:
+        issued = _list_issued_credentials(client=None, issuer_addr=subject_addr, net=net)
+
+    return {
+        "network": net,
+        "account": subject_addr,
+        "did": record.agent_did,
+        "held_count": len(held),
+        "issued_count": len(issued),
+        "held": held,
+        "issued": issued,
+    }
+
+
+def _list_issued_credentials(
+    *,
+    issuer_addr: str,
+    net: str,
+    client: Any = None,
+) -> list[dict[str, Any]]:
+    """Enumerate the credentials an account has issued to other subjects.
+
+    The ledger indexes credentials by SUBJECT, so there is no direct
+    "credentials I issued" query. The account's objects are walked
+    instead: a credential issued by this account appears in the issuer's
+    own object list under the 'credential' type, because the issuer
+    remains an owner of the credential object.
+    """
+    from xrpl.models.requests import AccountObjects
+
+    if client is None:
+        client = get_client(net)
+
+    try:
+        response = client.request(AccountObjects(account=issuer_addr, type="credential"))
+    except Exception:
+        return []
+
+    out = []
+    for obj in (getattr(response, "result", None) or {}).get("account_objects") or []:
+        if obj.get("Issuer") != issuer_addr:
+            continue
+        try:
+            cred_type = bytes.fromhex(obj.get("CredentialType", "") or "")
+        except ValueError:
+            cred_type = b""
+        flags = int(obj.get("Flags", 0) or 0)
+        uri_hex = obj.get("URI", "") or ""
+        try:
+            uri = bytes.fromhex(uri_hex).decode("utf-8", "replace") if uri_hex else None
+        except ValueError:
+            uri = None
+        out.append(
+            {
+                "issuer": obj.get("Issuer"),
+                "subject": obj.get("Subject"),
+                "credential_type": cred_type.decode("utf-8", "replace"),
+                "accepted": bool(flags & 0x00010000),
+                "uri": uri,
+                "expiration": obj.get("Expiration") or None,
+                "role": "issuer",
+            }
+        )
+    return out
 
 
 @server.tool(

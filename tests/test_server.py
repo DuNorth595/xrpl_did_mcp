@@ -63,6 +63,7 @@ def test_all_tools_registered():
         "issue_credential",
         "accept_credential",
         "get_credential",
+        "list_credentials",
         "lookup_account",
         "lookup_transaction",
     }
@@ -87,6 +88,7 @@ def test_tool_names_are_verb_first():
             "issue",
             "accept",
             "get",
+            "list",
             "lookup",
         }, f"{tool.name} does not start with a known verb"
 
@@ -779,3 +781,235 @@ def test_check_authorization_applies_caller_deny_and_ban(monkeypatch):
     actions = [a for a, _ in captured["registry"].rules]
     assert "deny" in actions
     assert "ban" in actions
+
+
+def test_list_credentials_reports_held_and_issued(monkeypatch):
+    """The listing separates what an account holds from what it issued."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+
+    class _Cred:
+        def __init__(self, issuer, subject, ctype, accepted, uri=None, expiration=None):
+            self.issuer = issuer
+            self.subject = subject
+            self.credential_type = ctype
+            self.accepted = accepted
+            self.uri = uri
+            self.expiration = expiration
+
+    class _Record:
+        agent_did = "did:xrpl:2:" + MAINNET_ADDRESS
+        credentials: ClassVar[list] = [
+            _Cred("did:xrpl:2:rIssuer", "did:xrpl:2:rSubject", b"KYC", True, "https://x.test/c"),
+            _Cred("did:xrpl:2:rOther", "did:xrpl:2:rSubject", b"BADGE", False),
+        ]
+
+    class _Registry:
+        def __init__(self, network=None):
+            self.network = network
+
+        def resolve(self, agent_identifier, use_cache=True):
+            return _Record()
+
+    monkeypatch.setattr(server_module, "get_client", lambda net: object())
+    import xrpl_agent_id.registry as registry_module
+
+    monkeypatch.setattr(registry_module, "AgentRegistry", _Registry)
+
+    out = server_module.list_credentials(account=MAINNET_ADDRESS, network="testnet")
+    assert "error" not in out, out
+    assert out["held_count"] == 2
+    assert out["issued_count"] == 0
+    held = out["held"]
+    assert held[0]["credential_type"] == "KYC"
+    assert held[0]["accepted"] is True
+    assert held[0]["uri"] == "https://x.test/c"
+    assert held[0]["role"] == "subject"
+    # A credential that exists but was never accepted is marked so.
+    assert held[1]["accepted"] is False
+
+
+def test_list_credentials_is_a_pure_read(monkeypatch):
+    """list_credentials needs neither --allow-writes nor a seed."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", False)
+
+    def _boom(seed=None):
+        raise AssertionError("list_credentials must not ask for a seed")
+
+    monkeypatch.setattr(server_module.credentials, "resolve_seed", _boom)
+
+    class _Registry:
+        def __init__(self, network=None):
+            pass
+
+        def resolve(self, agent_identifier, use_cache=True):
+            class R:
+                agent_did = "did:xrpl:2:" + MAINNET_ADDRESS
+                credentials: ClassVar[list] = []
+
+            return R()
+
+    import xrpl_agent_id.registry as registry_module
+
+    monkeypatch.setattr(registry_module, "AgentRegistry", _Registry)
+    monkeypatch.setattr(server_module, "get_client", lambda net: object())
+
+    out = server_module.list_credentials(account=MAINNET_ADDRESS, network="testnet")
+    assert "error" not in out, out
+    assert out["held_count"] == 0
+
+
+def test_list_credentials_accepts_a_did(monkeypatch):
+    """A did:xrpl account is reduced to its address before the query."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    seen = {}
+
+    class _Registry:
+        def __init__(self, network=None):
+            pass
+
+        def resolve(self, agent_identifier, use_cache=True):
+            seen["id"] = agent_identifier
+
+            class R:
+                agent_did = MAINNET_DID
+                credentials: ClassVar[list] = []
+
+            return R()
+
+    import xrpl_agent_id.registry as registry_module
+
+    monkeypatch.setattr(registry_module, "AgentRegistry", _Registry)
+    monkeypatch.setattr(server_module, "get_client", lambda net: object())
+
+    out = server_module.list_credentials(account=MAINNET_DID, network="testnet")
+    assert "error" not in out, out
+    assert seen["id"] == MAINNET_ADDRESS
+
+
+def test_list_credentials_can_skip_the_issued_side(monkeypatch):
+    """include_issued=False avoids the extra account_objects walk."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+
+    def _boom(net):
+        raise AssertionError("the issued side must not be queried when excluded")
+
+    class _Registry:
+        def __init__(self, network=None):
+            pass
+
+        def resolve(self, agent_identifier, use_cache=True):
+            class R:
+                agent_did = MAINNET_DID
+                credentials: ClassVar[list] = []
+
+            return R()
+
+    import xrpl_agent_id.registry as registry_module
+
+    monkeypatch.setattr(registry_module, "AgentRegistry", _Registry)
+    monkeypatch.setattr(server_module, "get_client", _boom)
+
+    out = server_module.list_credentials(
+        account=MAINNET_ADDRESS, network="testnet", include_issued=False
+    )
+    assert "error" not in out, out
+    assert out["issued_count"] == 0
+
+
+def test_list_credentials_finds_the_credentials_an_account_issued(monkeypatch):
+    """The issued side reads the account's own credential objects."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+
+    class _Cred:
+        issuer = "did:xrpl:2:rIssuer"
+        subject = "did:xrpl:2:rSubject"
+        credential_type = b"KYC"
+        accepted = False
+        uri = None
+        expiration = None
+
+    class _Record:
+        agent_did = "did:xrpl:2:" + MAINNET_ADDRESS
+        credentials: ClassVar[list] = [_Cred()]
+
+    class _Registry:
+        def __init__(self, network=None):
+            pass
+
+        def resolve(self, agent_identifier, use_cache=True):
+            return _Record()
+
+    class _Resp:
+        result: ClassVar[dict] = {
+            "account_objects": [
+                {
+                    "Issuer": MAINNET_ADDRESS,
+                    "Subject": "rSubjectAddress",
+                    "CredentialType": b"KYC".hex().upper(),
+                    "Flags": 0x00010000,
+                    "URI": b"https://x.test/c".hex().upper(),
+                    "Expiration": 857279363,
+                },
+                {
+                    # Not issued by this account -- must be skipped.
+                    "Issuer": "rSomeoneElse",
+                    "Subject": "rSubjectAddress",
+                    "CredentialType": b"KYC".hex().upper(),
+                    "Flags": 0,
+                },
+            ]
+        }
+
+    class _Client:
+        def request(self, req):
+            return _Resp()
+
+    import xrpl_agent_id.registry as registry_module
+
+    monkeypatch.setattr(registry_module, "AgentRegistry", _Registry)
+    monkeypatch.setattr(server_module, "get_client", lambda net: _Client())
+
+    out = server_module.list_credentials(account=MAINNET_ADDRESS, network="testnet")
+    assert "error" not in out, out
+    assert out["issued_count"] == 1
+    issued = out["issued"][0]
+    assert issued["subject"] == "rSubjectAddress"
+    assert issued["credential_type"] == "KYC"
+    assert issued["accepted"] is True
+    assert issued["uri"] == "https://x.test/c"
+    assert issued["expiration"] == 857279363
+    assert issued["role"] == "issuer"
+
+
+@pytest.mark.skipif(not LIVE, reason="set XRPL_MCP_LIVE=1 to run ledger-backed tests")
+def test_list_credentials_on_the_testnet_ledger():
+    """Enumerate the credentials on a real testnet account.
+
+    The spec example account holds credentials issued by two different
+    issuers, so this proves the enumeration finds more than one and
+    reports the issuer for each.
+    """
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+
+    out = server_module.list_credentials(account=MAINNET_ADDRESS, network="testnet")
+    assert "error" not in out, out
+    assert out["held_count"] >= 1
+    assert out["account"] == MAINNET_ADDRESS
+    for cred in out["held"]:
+        assert cred["role"] == "subject"
+        assert cred["subject"].endswith(MAINNET_ADDRESS)
+        assert isinstance(cred["accepted"], bool)
+        assert cred["credential_type"]
