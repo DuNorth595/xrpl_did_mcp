@@ -7,6 +7,10 @@ with --allow-writes, and they take their signing seed from the OS
 keychain, which the server reads itself -- the seed never passes through
 the agent's context.
 
+Trust decisions combine the caller's policy with the server operator's
+policy file, so a caller cannot widen its own permissions by passing a
+permissive policy. See xrpl_did_mcp.policy.
+
 Run it:
     python -m xrpl_did_mcp                       # stdio, read-only
     python -m xrpl_did_mcp --allow-writes        # stdio, writes enabled
@@ -32,9 +36,9 @@ from xrpl_agent_id import (
 )
 from xrpl_agent_id.tx_submit import submit_with_retry
 
-from xrpl_did_mcp import credentials
+from xrpl_did_mcp import credentials, policy
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 #: Set by --allow-writes at startup. When False, the write tools refuse
 #: rather than submitting a transaction.
@@ -57,8 +61,10 @@ server = MCPServer(
         "Each tool has one job: derive_did turns an address into a did:xrpl, "
         "resolve_did returns a DID Document, lookup_account returns an "
         "account's balance and state, and lookup_transaction returns a "
-        "transaction's result. Read-only unless a caller supplies a funded "
-        "seed explicitly."
+        "transaction's result. check_authorization decides whether an agent "
+        "may act. The three write tools -- publish_did_set, revoke_did and "
+        "revoke_credential -- change the ledger and are refused unless the "
+        "server was started with --allow-writes."
     ),
 )
 
@@ -131,7 +137,10 @@ def resolve_did_tool(did: str, network: str = "") -> dict[str, Any]:
         "Evaluate an agent against a trust policy and return an allow/deny "
         "decision with the reasons. The result reports which required "
         "credentials are missing and which deny rules matched, so the "
-        "decision is auditable rather than a bare boolean."
+        "decision is auditable rather than a bare boolean.\n\n"
+        "The caller's policy is combined with the server operator's policy "
+        "file, if one is configured. The operator's deny and ban rules are "
+        "applied on top of the caller's and cannot be waived by them."
     ),
 )
 def check_authorization(
@@ -139,6 +148,8 @@ def check_authorization(
     trusted_issuers: list[str],
     credential_type: str,
     network: str = "",
+    denied_issuers: list[str] | None = None,
+    banned_agents: list[str] | None = None,
 ) -> dict[str, Any]:
     """Check an agent's credentials against a trust policy."""
     net = network or _network_default()
@@ -148,6 +159,27 @@ def check_authorization(
         credential_type=credential_type.encode("utf-8"),
         description="Required authorization credential.",
     )
+    if denied_issuers:
+        registry.deny(
+            issuer=set(denied_issuers),
+            credential_type=credential_type.encode("utf-8"),
+            description="Caller-supplied deny rule.",
+        )
+    if banned_agents:
+        registry.ban(subject=set(banned_agents), description="Caller-supplied ban.")
+
+    # The operator's policy is applied on top of the caller's, so a caller
+    # cannot widen its own permissions by passing a permissive policy.
+    try:
+        operator_policy = policy.load_policy()
+    except ValueError as exc:
+        return {"error": "POLICY_INVALID", "message": str(exc)}
+
+    try:
+        policy.apply_policy(registry, operator_policy)
+    except Exception as exc:
+        return {"error": "POLICY_INVALID", "message": str(exc)}
+
     try:
         result = registry.check(agent_did)
     except Exception as exc:
@@ -166,6 +198,7 @@ def check_authorization(
             for issuer, ctype in (result.denied_held or [])
         ],
         "decision": "ALLOW" if result.satisfied else "DENY",
+        "operator_policy": operator_policy.summary(),
     }
 
 
@@ -255,6 +288,192 @@ def publish_did_set(
         "network": net,
         "did": did_from_account(address, network=net),
         "uri": uri,
+        "seed_source": source,
+    }
+
+
+@server.tool(
+    name="revoke_did",
+    title="Delete an account's DID Document (writes to the ledger)",
+    description=(
+        "Submit a DIDDelete transaction, removing the account's DID Document "
+        "from the ledger so the DID no longer resolves. THIS WRITES TO THE "
+        "LEDGER and spends XRP.\n\n"
+        "DIDDelete takes only common fields -- it always deletes the "
+        "signer's own DID, so the address must match the account the seed "
+        "controls.\n\n"
+        "This does NOT delete the account's credentials. A DID and a "
+        "credential are separate ledger objects, and rippled's DIDDelete "
+        "erases only the DID. To withdraw an authorization, revoke the "
+        "credential too.\n\n"
+        "This tool is only available if the server was started with "
+        "--allow-writes. The signing seed comes from the OS keychain, which "
+        "the server reads itself, so the seed never passes through the "
+        "agent's context."
+    ),
+)
+def revoke_did(
+    address: str,
+    network: str = "",
+    seed: str = "",
+) -> dict[str, Any]:
+    """Delete an account's DID Document. Writes to the ledger and spends XRP."""
+    net = network or _network_default()
+
+    if not ALLOW_WRITES:
+        return {
+            "error": "WRITES_DISABLED",
+            "message": "This server was started without --allow-writes.",
+            "hint": "Restart the server with --allow-writes to enable this tool.",
+        }
+
+    from xrpl.models.transactions import DIDDelete
+    from xrpl.wallet import Wallet
+
+    signing_seed, source = credentials.resolve_seed(seed or None)
+    if signing_seed is None:
+        if seed:
+            return {
+                "error": "INLINE_SEED_REFUSED",
+                "message": "This server was started without --allow-inline-seed.",
+                "hint": (
+                    "An inline seed is refused by default, because a seed in "
+                    "the agent's context is a seed the agent can read. Use the "
+                    "keychain, or start the server with --allow-inline-seed for "
+                    "throwaway testnet use."
+                ),
+            }
+        return {
+            "error": "NO_SEED",
+            "message": "No signing seed available.",
+            "hint": credentials.install_keychain_help(),
+        }
+
+    try:
+        wallet = Wallet.from_seed(signing_seed)
+    except Exception as exc:
+        return {"error": "INVALID_SEED", "message": str(exc)}
+
+    # DIDDelete always targets the sender's own DID, so a seed that does
+    # not control the requested address would delete the wrong DID. Check
+    # before spending.
+    if wallet.address != address:
+        return {
+            "error": "ADDRESS_MISMATCH",
+            "message": (
+                f"The signing seed controls {wallet.address}, not {address}. "
+                "DIDDelete can only delete the signer's own DID."
+            ),
+            "hint": "Pass the address the seed actually controls.",
+        }
+
+    client = get_client(net)
+    try:
+        result = submit_with_retry(DIDDelete(account=address), client, wallet) or {}
+    except Exception as exc:
+        return {"error": type(exc).__name__, "message": str(exc)}
+
+    meta = result.get("meta") or {}
+    return {
+        "tx_hash": result.get("hash"),
+        "tx_result": meta.get("TransactionResult"),
+        "ledger_index": result.get("ledger_index"),
+        "network": net,
+        "did": did_from_account(address, network=net),
+        "seed_source": source,
+    }
+
+
+@server.tool(
+    name="revoke_credential",
+    title="Revoke a credential (writes to the ledger)",
+    description=(
+        "Submit a CredentialDelete transaction, withdrawing one credential so "
+        "it no longer counts as held. THIS WRITES TO THE LEDGER and spends "
+        "XRP.\n\n"
+        "A credential is identified by the triple (issuer, subject, "
+        "credential_type). The issuer or the subject may sign the delete.\n\n"
+        "This tool is only available if the server was started with "
+        "--allow-writes. The signing seed comes from the OS keychain, which "
+        "the server reads itself, so the seed never passes through the "
+        "agent's context."
+    ),
+)
+def revoke_credential(
+    subject: str,
+    credential_type: str,
+    network: str = "",
+    seed: str = "",
+) -> dict[str, Any]:
+    """Revoke a credential. Writes to the ledger and spends XRP."""
+    net = network or _network_default()
+
+    if not ALLOW_WRITES:
+        return {
+            "error": "WRITES_DISABLED",
+            "message": "This server was started without --allow-writes.",
+            "hint": "Restart the server with --allow-writes to enable this tool.",
+        }
+
+    from xrpl.models.transactions import CredentialDelete
+    from xrpl.wallet import Wallet
+
+    subject_addr = subject
+    if subject.startswith("did:xrpl:"):
+        try:
+            _, subject_addr = parse_did(subject)
+        except Exception as exc:
+            return {"error": "INVALID_DID", "message": str(exc)}
+
+    signing_seed, source = credentials.resolve_seed(seed or None)
+    if signing_seed is None:
+        if seed:
+            return {
+                "error": "INLINE_SEED_REFUSED",
+                "message": "This server was started without --allow-inline-seed.",
+                "hint": (
+                    "An inline seed is refused by default, because a seed in "
+                    "the agent's context is a seed the agent can read. Use the "
+                    "keychain, or start the server with --allow-inline-seed for "
+                    "throwaway testnet use."
+                ),
+            }
+        return {
+            "error": "NO_SEED",
+            "message": "No signing seed available.",
+            "hint": credentials.install_keychain_help(),
+        }
+
+    try:
+        wallet = Wallet.from_seed(signing_seed)
+    except Exception as exc:
+        return {"error": "INVALID_SEED", "message": str(exc)}
+
+    try:
+        cred_type = credential_type.encode("utf-8")
+    except Exception as exc:
+        return {"error": "INVALID_CREDENTIAL_TYPE", "message": str(exc)}
+
+    client = get_client(net)
+    tx = CredentialDelete(
+        account=wallet.address,
+        subject=subject_addr,
+        credential_type=cred_type.hex().upper(),
+    )
+    try:
+        result = submit_with_retry(tx, client, wallet) or {}
+    except Exception as exc:
+        return {"error": type(exc).__name__, "message": str(exc)}
+
+    meta = result.get("meta") or {}
+    return {
+        "tx_hash": result.get("hash"),
+        "tx_result": meta.get("TransactionResult"),
+        "ledger_index": result.get("ledger_index"),
+        "network": net,
+        "issuer": wallet.address,
+        "subject": subject_addr,
+        "credential_type": credential_type,
         "seed_source": source,
     }
 

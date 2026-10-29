@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xrpl-did-mcp"
-version = "0.3.0"
+version = "0.4.0"
 description = "MCP server for did:xrpl -- W3C-compatible agent identity on the XRP Ledger"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -34,7 +34,7 @@ dependencies = [
   # would resolve whatever `main` happened to be at that moment, and a
   # breaking change upstream would silently change an install that was
   # already working.
-  "xrpl-agent-id @ git+https://github.com/DuNorth595/xrpl_agent_id.git@v0.5.2",
+  "xrpl-agent-id @ git+https://github.com/DuNorth595/xrpl_agent_id.git@v0.5.3",
   "mcp>=2.0",
 ]
 

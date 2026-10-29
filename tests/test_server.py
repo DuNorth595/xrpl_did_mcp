@@ -25,6 +25,21 @@ MAINNET_DID = "did:xrpl:1:rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 MAINNET_TX_HASH = "58318A01B76A5E8C7B40A5B704581A219A72CFEB457915F9CE91B6CBBE84A212"
 
 
+def make_wallet():
+    """A throwaway wallet for the write-path tests.
+
+    The seed is generated at runtime and never written down, so no
+    seed-shaped literal appears in the repository.
+    """
+    from xrpl.wallet import Wallet
+
+    return Wallet.create()
+
+
+def seed_of(wallet) -> str:
+    return wallet.seed
+
+
 def call(tool: str, args: dict) -> dict:
     """Call a tool and return its structured content."""
 
@@ -43,6 +58,8 @@ def test_all_tools_registered():
         "resolve_did",
         "check_authorization",
         "publish_did_set",
+        "revoke_did",
+        "revoke_credential",
         "lookup_account",
         "lookup_transaction",
     }
@@ -63,6 +80,7 @@ def test_tool_names_are_verb_first():
             "resolve",
             "check",
             "publish",
+            "revoke",
             "lookup",
         }, f"{tool.name} does not start with a known verb"
 
@@ -242,3 +260,244 @@ def test_lookup_transaction():
     assert out["hash"] == MAINNET_TX_HASH
     assert "result" in out
     assert "ledger_index" in out
+
+
+def test_write_tools_refuse_without_allow_writes(monkeypatch):
+    """Every write tool refuses when the server is read-only."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", False)
+    monkeypatch.setattr(server_module.credentials, "resolve_seed", lambda seed=None: (None, "none"))
+
+    out = server_module.revoke_did(address=MAINNET_ADDRESS, network="mainnet")
+    assert out["error"] == "WRITES_DISABLED"
+
+    out = server_module.revoke_credential(
+        subject=MAINNET_ADDRESS, credential_type="agent-auth", network="mainnet"
+    )
+    assert out["error"] == "WRITES_DISABLED"
+
+
+def test_revoke_did_rejects_a_mismatched_address(monkeypatch):
+    """DIDDelete always targets the signer's own DID, so a wrong address
+    must be refused before anything is submitted."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", True)
+    other = make_wallet()
+    monkeypatch.setattr(
+        server_module.credentials,
+        "resolve_seed",
+        lambda seed=None: (seed_of(other), "keychain"),
+    )
+
+    submitted = []
+    monkeypatch.setattr(
+        server_module,
+        "submit_with_retry",
+        lambda tx, client, wallet: submitted.append(tx) or {"hash": "H"},
+    )
+
+    # The fake seed's address will not match MAINNET_ADDRESS.
+    out = server_module.revoke_did(address=MAINNET_ADDRESS, network="mainnet")
+    assert out["error"] == "ADDRESS_MISMATCH"
+    assert submitted == [], "nothing should be submitted on a mismatch"
+
+
+def test_revoke_did_submits_a_diddelete(monkeypatch):
+    """A matching address submits a DIDDelete for that account."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", True)
+
+    wallet = make_wallet()
+    monkeypatch.setattr(
+        server_module.credentials,
+        "resolve_seed",
+        lambda seed=None: (seed_of(wallet), "keychain"),
+    )
+
+    submitted = []
+    monkeypatch.setattr(
+        server_module,
+        "submit_with_retry",
+        lambda tx, client, wallet_: submitted.append(tx) or {"hash": "H", "meta": {}},
+    )
+
+    out = server_module.revoke_did(address=wallet.address, network="testnet")
+    assert "error" not in out, out
+    assert out["tx_hash"] == "H"
+    assert len(submitted) == 1
+    assert submitted[0].transaction_type == "DIDDelete"
+    assert submitted[0].account == wallet.address
+
+
+def test_revoke_credential_submits_a_credentialdelete(monkeypatch):
+    """The credential delete carries the (issuer, subject, type) triple."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", True)
+
+    wallet = make_wallet()
+    monkeypatch.setattr(
+        server_module.credentials,
+        "resolve_seed",
+        lambda seed=None: (seed_of(wallet), "keychain"),
+    )
+
+    submitted = []
+    monkeypatch.setattr(
+        server_module,
+        "submit_with_retry",
+        lambda tx, client, wallet_: submitted.append(tx) or {"hash": "H", "meta": {}},
+    )
+
+    out = server_module.revoke_credential(
+        subject=MAINNET_ADDRESS, credential_type="agent-auth", network="testnet"
+    )
+    assert "error" not in out, out
+    assert len(submitted) == 1
+    tx = submitted[0]
+    assert tx.transaction_type == "CredentialDelete"
+    assert tx.account == wallet.address
+    assert tx.subject == MAINNET_ADDRESS
+    assert tx.credential_type == b"agent-auth".hex().upper()
+
+
+def test_revoke_credential_accepts_a_did_as_the_subject(monkeypatch):
+    """A did:xrpl subject is reduced to its address before the delete."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.setattr(server_module, "ALLOW_WRITES", True)
+
+    monkeypatch.setattr(
+        server_module.credentials,
+        "resolve_seed",
+        lambda seed=None: (seed_of(make_wallet()), "keychain"),
+    )
+
+    submitted = []
+    monkeypatch.setattr(
+        server_module,
+        "submit_with_retry",
+        lambda tx, client, wallet_: submitted.append(tx) or {"hash": "H", "meta": {}},
+    )
+
+    out = server_module.revoke_credential(
+        subject=MAINNET_DID, credential_type="agent-auth", network="testnet"
+    )
+    assert "error" not in out, out
+    assert submitted[0].subject == MAINNET_ADDRESS
+
+
+def test_check_authorization_reports_the_operator_policy(monkeypatch, tmp_path):
+    """The output shows which operator policy was applied."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+
+    policy_file = tmp_path / "trust_policy.json"
+    policy_file.write_text('{"ban": {"agents": ["rBanned"]}}', encoding="utf-8")
+    monkeypatch.setenv("XRPL_MCP_POLICY", str(policy_file))
+
+    class _Result:
+        satisfied: ClassVar[bool] = False
+        missing_required: ClassVar[list] = []
+        denied_held: ClassVar[list] = []
+
+    class _Registry:
+        def __init__(self, network=""):
+            self.rules = []
+
+        def require(self, **kwargs):
+            self.rules.append(kwargs)
+
+        def deny(self, **kwargs):
+            self.rules.append(kwargs)
+
+        def ban(self, **kwargs):
+            self.rules.append(kwargs)
+
+        def check(self, agent_did):
+            return _Result()
+
+    monkeypatch.setattr(server_module, "TrustRegistry", _Registry)
+
+    out = server_module.check_authorization(
+        agent_did=MAINNET_DID,
+        trusted_issuers=["rIssuer"],
+        credential_type="agent-auth",
+        network="mainnet",
+    )
+    assert out["operator_policy"]["loaded"] is True
+    assert out["operator_policy"]["ban_agents"] == ["rBanned"]
+
+
+def test_check_authorization_refuses_a_malformed_operator_policy(monkeypatch, tmp_path):
+    """A broken policy file is surfaced, not ignored."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+
+    policy_file = tmp_path / "trust_policy.json"
+    policy_file.write_text("{broken", encoding="utf-8")
+    monkeypatch.setenv("XRPL_MCP_POLICY", str(policy_file))
+
+    out = server_module.check_authorization(
+        agent_did=MAINNET_DID,
+        trusted_issuers=["rIssuer"],
+        credential_type="agent-auth",
+        network="mainnet",
+    )
+    assert out["error"] == "POLICY_INVALID"
+
+
+def test_check_authorization_applies_caller_deny_and_ban(monkeypatch):
+    """The caller can also express deny and ban rules."""
+    import importlib
+
+    server_module = importlib.import_module("xrpl_did_mcp.server")
+    monkeypatch.delenv("XRPL_MCP_POLICY", raising=False)
+
+    captured = {}
+
+    class _Registry:
+        def __init__(self, network=""):
+            captured["registry"] = self
+            self.rules = []
+
+        def require(self, **kwargs):
+            self.rules.append(("require", kwargs))
+
+        def deny(self, **kwargs):
+            self.rules.append(("deny", kwargs))
+
+        def ban(self, **kwargs):
+            self.rules.append(("ban", kwargs))
+
+        def check(self, agent_did):
+            class _R:
+                satisfied: ClassVar[bool] = True
+                missing_required: ClassVar[list] = []
+                denied_held: ClassVar[list] = []
+
+            return _R()
+
+    monkeypatch.setattr(server_module, "TrustRegistry", _Registry)
+
+    server_module.check_authorization(
+        agent_did=MAINNET_DID,
+        trusted_issuers=["rIssuer"],
+        credential_type="agent-auth",
+        network="mainnet",
+        denied_issuers=["rDenied"],
+        banned_agents=["rBanned"],
+    )
+    actions = [a for a, _ in captured["registry"].rules]
+    assert "deny" in actions
+    assert "ban" in actions

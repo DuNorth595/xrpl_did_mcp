@@ -48,10 +48,17 @@ environment-variable fallback: an env var would put the seed in the
 environment of a process the agent can influence, which is the problem the
 keychain solves.
 
-**Five of the six tools are read-only.** `derive_did`, `resolve_did`,
+**Five of the eight tools are read-only.** `derive_did`, `resolve_did`,
 `check_authorization`, `lookup_account`, and `lookup_transaction` never
-submit a transaction. `publish_did_set` is the only tool that writes, and
-it costs XRP.
+submit a transaction. `publish_did_set`, `revoke_did`, and
+`revoke_credential` write, and each costs XRP.
+
+**The caller cannot widen its own trust policy.** `check_authorization`
+combines the caller's rules with the server operator's policy file, and the
+operator's deny and ban rules are applied on top. An agent that passes a
+permissive policy does not thereby gain permissions the operator withheld.
+A malformed operator policy file is reported as `POLICY_INVALID` rather
+than ignored.
 
 **Write tools are opt-in.** `publish_did_set` returns `WRITES_DISABLED`
 unless the server was started with `--allow-writes`. An agent cannot turn
@@ -66,7 +73,7 @@ than letting the ledger reject it after paying a fee.
 failing a transaction that was in fact accepted.
 
 **Dependencies are pinned to a release tag.** `xrpl-agent-id` is installed
-from `v0.5.2`, not from a moving branch, so an install cannot silently
+from `v0.5.3`, not from a moving branch, so an install cannot silently
 change underneath you.
 
 ## Running it safely

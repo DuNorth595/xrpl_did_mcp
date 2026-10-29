@@ -6,7 +6,7 @@ Point any MCP client at it and your agent can derive, resolve, and authorize ide
 
 ```bash
 # not on PyPI yet -- install from GitHub, pinned to the release tag
-pip install "xrpl-did-mcp @ git+https://github.com/DuNorth595/xrpl_did_mcp.git@v0.3.0"
+pip install "xrpl-did-mcp @ git+https://github.com/DuNorth595/xrpl_did_mcp.git@v0.4.0"
 ```
 
 That one command pulls in `xrpl-agent-id` and `xrpl-py` as well. Both are
@@ -25,14 +25,33 @@ you.
 | `lookup_account` | Read an account's balance and on-ledger state | No |
 | `lookup_transaction` | Read a transaction's result and inclusion status | No |
 | `publish_did_set` | Publish an agent's DID Document | **Yes** — spends XRP |
+| `revoke_did` | Delete an account's DID Document | **Yes** — spends XRP |
+| `revoke_credential` | Withdraw one credential | **Yes** — spends XRP |
 
-Five of the six tools are read-only. The one that writes:
+Five of the eight tools are read-only. The three that write:
 
-- **Refuses by default.** It returns `WRITES_DISABLED` unless the server was
-  started with `--allow-writes`.
-- **Takes no seed argument.** The signing seed comes from the OS keychain,
+- **Refuse by default.** Each returns `WRITES_DISABLED` unless the server
+  was started with `--allow-writes`.
+- **Take no seed argument.** The signing seed comes from the OS keychain,
   which the server reads itself, so the seed never passes through the
   agent's context.
+
+### Revocation
+
+`revoke_did` submits a `DIDDelete`, so the DID no longer resolves.
+`DIDDelete` always targets the signer's own DID, so the tool refuses with
+`ADDRESS_MISMATCH` if the address is not the one the seed controls —
+before anything is submitted.
+
+`revoke_credential` submits a `CredentialDelete`, withdrawing one
+credential. A credential is identified by the triple (issuer, subject,
+credential_type); the subject may be an address or a `did:xrpl`.
+
+**Deleting a DID does not delete the account's credentials.** A DID and a
+credential are separate ledger objects — a DID is keyed by its owner
+account, a credential by (issuer, subject, credential_type). rippled's
+`DIDDelete` erases only the DID. To withdraw an authorization, revoke the
+credential too.
 
 ---
 
@@ -84,6 +103,50 @@ seed the agent can read.
 Without that flag the `seed` argument is refused: the tool returns
 `INLINE_SEED_REFUSED` and falls back to the keychain. The keychain is
 always tried first, even when an inline seed is supplied.
+
+---
+
+## Operator trust policy
+
+The caller of a tool is not necessarily the operator of the server. An
+agent that chooses its own trust policy can always choose a permissive
+one, so the server keeps its own policy on disk and applies it **on top of**
+whatever the caller passes.
+
+Put a `trust_policy.json` in the server's working directory, or point
+`XRPL_MCP_POLICY` at one:
+
+```json
+{
+  "require": {
+    "issuers": ["rTrustedIssuer..."],
+    "credential_type": "agent-authorization"
+  },
+  "deny": {
+    "issuers": ["rRevokedIssuer..."],
+    "credential_type": "agent-authorization"
+  },
+  "ban": {
+    "agents": ["did:xrpl:1:rBanned...", "rBannedPlain..."]
+  }
+}
+```
+
+Every section is optional.
+
+- **`require`** — the agent must hold this credential.
+- **`deny`** — holding this credential is grounds for refusal, whatever
+  else it holds.
+- **`ban`** — the agent is refused outright.
+
+The operator's rules cannot be waived by the caller. A missing policy file
+means the operator has not expressed an opinion — it does **not** mean
+allow everything; it means no operator rules are added to the caller's.
+
+A policy file that exists but cannot be parsed is surfaced as
+`POLICY_INVALID` rather than ignored, because silently dropping the
+operator's deny rules would quietly remove the property the file exists to
+provide.
 
 ---
 

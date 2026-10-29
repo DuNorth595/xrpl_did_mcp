@@ -4,6 +4,55 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-10-28
+
+Revocation, and a trust decision the caller cannot widen.
+
+The MCP registry's lifecycle review noted that an agent could be
+authorized but never de-authorized. That gap is now closed: a DID Document
+can be deleted, a credential can be revoked, and the server enforces a
+trust policy that its caller cannot relax.
+
+### Added
+
+- **`revoke_did`** — submit a `DIDDelete`, removing the account's DID
+  Document so the DID no longer resolves. `DIDDelete` takes only common
+  fields and always targets the signer's own DID, so the tool refuses with
+  `ADDRESS_MISMATCH` if the requested address is not the one the seed
+  controls — before anything is submitted.
+- **`revoke_credential`** — submit a `CredentialDelete`, withdrawing one
+  credential. The credential is identified by the triple (issuer, subject,
+  credential_type); the subject may be given as an address or a `did:xrpl`.
+- **`src/xrpl_did_mcp/policy.py`** — the operator's trust policy, loaded
+  from `trust_policy.json` (or the path in `XRPL_MCP_POLICY`). It carries
+  `require`, `deny` and `ban` sections.
+- **`check_authorization`** gained two optional arguments,
+  `denied_issuers` and `banned_agents`, and now reports the operator
+  policy it applied.
+
+### Changed
+
+- **The operator's policy is applied on top of the caller's.** A caller
+  that passes a permissive policy cannot widen its own permissions: the
+  operator's deny and ban rules still apply. A missing policy file means
+  the operator has not expressed an opinion, which is not the same as
+  allowing everything — it means no operator rules are added.
+- **A malformed policy file is surfaced, not ignored.** The tool returns
+  `POLICY_INVALID`. Silently dropping the operator's deny rules because of
+  a typo would quietly remove the property the file exists to provide.
+
+### Notes
+
+- Deleting a DID Document does **not** delete the account's credentials.
+  The two are separate ledger objects: a DID is keyed by its owner
+  account, and a credential by (issuer, subject, credential_type).
+  rippled's `DIDDelete` erases only the DID object. To withdraw an
+  authorization, revoke the credential too.
+- All three write tools are refused unless the server was started with
+  `--allow-writes`, and all three read their seed from the OS keychain.
+- `xrpl-agent-id` is now pinned to `v0.5.3`, which adds
+  `AgentIdentity.delete_did()`.
+
 ## [0.3.0] — 2026-10-28
 
 Each tool now does exactly one thing, and the names say what they do.
@@ -121,6 +170,7 @@ First release.
 - Eight offline tests; one ledger-backed test is skipped unless
   `XRPL_MCP_LIVE=1` is set.
 
+[0.4.0]: https://github.com/DuNorth595/xrpl_did_mcp/releases/tag/v0.4.0
 [0.3.0]: https://github.com/DuNorth595/xrpl_did_mcp/releases/tag/v0.3.0
 [0.2.0]: https://github.com/DuNorth595/xrpl_did_mcp/releases/tag/v0.2.0
 [0.1.1]: https://github.com/DuNorth595/xrpl_did_mcp/releases/tag/v0.1.1
