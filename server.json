@@ -1,0 +1,35 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.DuNorth595/xrpl-did-mcp",
+  "description": "Derive, resolve, publish, revoke, and authorize did:xrpl identities on the XRP Ledger.",
+  "status": "active",
+  "repository": {
+    "url": "https://github.com/DuNorth595/xrpl_did_mcp",
+    "source": "github"
+  },
+  "version": "0.4.0",
+  "packages": [
+    {
+      "registry_type": "pypi",
+      "registry_base_url": "https://pypi.org",
+      "identifier": "xrpl-did-mcp",
+      "version": "0.4.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtime_hint": "uvx",
+      "runtime_arguments": [
+        {
+          "type": "named",
+          "name": "from",
+          "value": "git+https://github.com/DuNorth595/xrpl_did_mcp.git@v0.4.0"
+        },
+        {
+          "type": "named",
+          "name": "with",
+          "value": "xrpl-did-mcp"
+        }
+      ]
+    }
+  ]
+}
