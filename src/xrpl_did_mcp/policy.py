@@ -172,3 +172,126 @@ def apply_policy(registry: Any, policy: OperatorPolicy) -> None:
             ),
             description="Operator required credential.",
         )
+
+
+def authorize_write(
+    agent_did: str,
+    *,
+    network: str = "",
+    registry_factory: Any = None,
+) -> dict[str, Any]:
+    """Decide whether a write may proceed, under the operator's policy.
+
+    This is the write-path counterpart to check_authorization. Until now the
+    operator's require/deny/ban rules were only consulted when a caller
+    explicitly asked for a check -- the write tools never called them, so a
+    policy that said "only agents holding this credential may act" was not
+    actually enforced against a write.
+
+    The write tools now call this before they touch a seed or build a
+    transaction.
+
+    The rules it applies, in order:
+
+    1. A malformed policy file is an error, not an absence. It returns
+       POLICY_INVALID, because silently dropping a malformed deny list would
+       quietly remove the one property the file exists to provide.
+
+    2. A policy with no rules allows. "The operator has not expressed an
+       opinion" is not "allow everything" -- it means no operator rules are
+       added. A server with no policy file keeps working exactly as before.
+
+    3. The operator's rules are applied on top of the caller's, never
+       instead of them.
+
+    4. The check fails CLOSED. If the ledger cannot be read, the write is
+       refused with LEDGER_UNAVAILABLE. A policy that cannot be evaluated
+       must not become an allow -- otherwise taking the ledger down is a
+       way to switch the policy off.
+
+    Returns a dict with "allowed": True, or "allowed": False plus "error"
+    and "message" describing the refusal.
+    """
+    try:
+        operator_policy = load_policy()
+    except ValueError as exc:
+        return {
+            "allowed": False,
+            "error": "POLICY_INVALID",
+            "message": str(exc),
+        }
+
+    if not operator_policy.has_rules:
+        # The operator has expressed no opinion. Nothing to enforce.
+        return {"allowed": True, "operator_policy": operator_policy.summary()}
+
+    if registry_factory is None:
+        from xrpl_agent_id import TrustRegistry
+
+        def registry_factory(net: str) -> Any:
+            return TrustRegistry(network=net)
+
+    net = network or os.environ.get("XRPL_MCP_NETWORK", "testnet")
+    registry = registry_factory(net)
+    try:
+        apply_policy(registry, operator_policy)
+    except Exception as exc:
+        return {
+            "allowed": False,
+            "error": "POLICY_INVALID",
+            "message": str(exc),
+        }
+
+    try:
+        result = registry.check(agent_did)
+    except Exception as exc:
+        # The ledger could not be read, so the policy could not be evaluated.
+        # Refuse. A policy that cannot be checked is not a policy that
+        # allows.
+        return {
+            "allowed": False,
+            "error": "LEDGER_UNAVAILABLE",
+            "message": f"the operator's policy could not be evaluated: {exc}",
+            "hint": (
+                "The write was refused because the policy could not be "
+                "checked. This is deliberate: a policy that cannot be "
+                "evaluated must not become an allow."
+            ),
+        }
+
+    if getattr(result, "banned", False):
+        return {
+            "allowed": False,
+            "error": "AGENT_BANNED",
+            "message": getattr(result, "ban_reason", None) or "the agent is banned",
+            "operator_policy": operator_policy.summary(),
+        }
+
+    if not result.satisfied:
+        missing = [
+            {
+                "issuer": issuer,
+                "credential_type": ctype.decode("utf-8", "replace"),
+            }
+            for issuer, ctype in (result.missing_required or [])
+        ]
+        denied = [
+            {
+                "issuer": issuer,
+                "credential_type": ctype.decode("utf-8", "replace"),
+            }
+            for issuer, ctype in (result.denied_held or [])
+        ]
+        return {
+            "allowed": False,
+            "error": "NOT_AUTHORIZED",
+            "message": "the agent does not satisfy the operator's trust policy",
+            "missing_required": missing,
+            "denied_held": denied,
+            "operator_policy": operator_policy.summary(),
+        }
+
+    return {
+        "allowed": True,
+        "operator_policy": operator_policy.summary(),
+    }

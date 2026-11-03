@@ -75,6 +75,38 @@ server = MCPServer(
 )
 
 
+def _did_for(address: str, network: str = "") -> str:
+    """The DID form of an address, for the trust check.
+
+    The trust registry accepts either form, but resolving through the DID
+    keeps the check and the rest of the server speaking one language.
+
+    The network matters: a DID carries its network id, so deriving one
+    for a different network than the write targets would check the agent
+    against the wrong ledger. The caller passes the same network it is
+    about to write to.
+    """
+    net = network or _network_default()
+    try:
+        return did_from_account(address, network=net)
+    except Exception:
+        # A malformed address is not a DID, and the registry will reject
+        # it. Returning it unchanged keeps the failure where it belongs --
+        # in the authorization check -- rather than in a derivation.
+        return address
+
+
+def _authorization_refusal(authz: dict[str, Any]) -> dict[str, Any]:
+    """Shape an authorization refusal into the tool's error contract."""
+    return {
+        "error": authz.get("error", "NOT_AUTHORIZED"),
+        "message": authz.get("message", "the write is not authorized"),
+        "hint": authz.get("hint", ""),
+        "missing_required": authz.get("missing_required", []),
+        "denied_held": authz.get("denied_held", []),
+    }
+
+
 def _network_default() -> str:
     return os.environ.get("XRPL_MCP_NETWORK", "testnet")
 
@@ -241,6 +273,13 @@ def publish_did_set(
             "hint": "Restart the server with --allow-writes to enable this tool.",
         }
 
+    # The operator's trust policy gates the write. It is checked before the
+    # seed is resolved and before anything is submitted, so a refusal costs
+    # nothing and leaks nothing.
+    _authz = policy.authorize_write(_did_for(address, net), network=net)
+    if not _authz.get("allowed"):
+        return _authorization_refusal(_authz)
+
     from xrpl.models.transactions import DIDSet
     from xrpl.wallet import Wallet
 
@@ -333,6 +372,13 @@ def revoke_did(
             "hint": "Restart the server with --allow-writes to enable this tool.",
         }
 
+    # The operator's trust policy gates the write. It is checked before the
+    # seed is resolved and before anything is submitted, so a refusal costs
+    # nothing and leaks nothing.
+    _authz = policy.authorize_write(_did_for(address, net), network=net)
+    if not _authz.get("allowed"):
+        return _authorization_refusal(_authz)
+
     from xrpl.models.transactions import DIDDelete
     from xrpl.wallet import Wallet
 
@@ -420,6 +466,13 @@ def revoke_credential(
             "message": "This server was started without --allow-writes.",
             "hint": "Restart the server with --allow-writes to enable this tool.",
         }
+
+    # The operator's trust policy gates the write. It is checked before the
+    # seed is resolved and before anything is submitted, so a refusal costs
+    # nothing and leaks nothing.
+    _authz = policy.authorize_write(_did_for(subject, net), network=net)
+    if not _authz.get("allowed"):
+        return _authorization_refusal(_authz)
 
     from xrpl.models.transactions import CredentialDelete
     from xrpl.wallet import Wallet
@@ -519,6 +572,13 @@ def issue_credential(
             "message": "This server was started without --allow-writes.",
             "hint": "Restart the server with --allow-writes to enable this tool.",
         }
+
+    # The operator's trust policy gates the write. It is checked before the
+    # seed is resolved and before anything is submitted, so a refusal costs
+    # nothing and leaks nothing.
+    _authz = policy.authorize_write(_did_for(subject, net), network=net)
+    if not _authz.get("allowed"):
+        return _authorization_refusal(_authz)
 
     from xrpl.models.transactions import CredentialCreate
     from xrpl.wallet import Wallet
@@ -660,6 +720,14 @@ def accept_credential(
         wallet = Wallet.from_seed(signing_seed)
     except Exception as exc:
         return {"error": "INVALID_SEED", "message": str(exc)}
+
+    # The operator's trust policy gates the write. For this tool the agent
+    # that matters is the SIGNING ACCOUNT -- the one accepting the
+    # credential -- and that is only known once the wallet is derived, so
+    # the check happens here rather than before the seed was resolved.
+    _authz = policy.authorize_write(_did_for(wallet.address, net), network=net)
+    if not _authz.get("allowed"):
+        return _authorization_refusal(_authz)
 
     try:
         cred_type = credential_type.encode("utf-8")
